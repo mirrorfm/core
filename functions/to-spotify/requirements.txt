@@ -1,0 +1,4 @@
+boto3==1.9.220
+botocore==1.12.220
+python-dateutil==2.8.0
+spotipy==2.4.4

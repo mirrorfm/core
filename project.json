@@ -1,0 +1,8 @@
+{
+  "name": "mirror-fm",
+  "description": "Mirror xyz to Spotify",
+  "memory": 128,
+  "timeout": 5,
+  "role": "arn:aws:iam::705440408593:role/mirror-fm_lambda_function",
+  "environment": {}
+}
