@@ -1,4 +1,2 @@
 env/
-.venv/
 env.json
-.cache-*

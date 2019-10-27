@@ -1,7 +1,7 @@
 {
-  "description": "Search for track names on Spotify",
+  "description": "Get tracks from a YouTube channel",
   "runtime": "python3.7",
-  "timeout": 120,
+  "timeout": 900,
   "hooks":{
     "build": "pip3 install -r requirements.txt -t ./env"
   }

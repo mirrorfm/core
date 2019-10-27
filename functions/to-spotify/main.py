@@ -4,7 +4,6 @@ Search track names on Spotify
 
 import os
 import sys
-from pprint import pprint
 
 # https://github.com/apex/apex/issues/639#issuecomment-455883587
 file_path = os.path.dirname(__file__)
@@ -21,9 +20,9 @@ from botocore.exceptions import ClientError
 
 import json
 import decimal
-import os
 import time
 import decimal
+from pprint import pprint
 from datetime import datetime, timezone
 
 import spotipy
@@ -68,10 +67,9 @@ HOST = "yt"
 client = boto3.client("dynamodb", region_name='eu-west-1')
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 cursors_table = dynamodb.Table('mirrorfm_cursors')
-playlists_table = dynamodb.Table('yt_playlists')
+playlists_table = dynamodb.Table('mirrorfm_yt_playlists')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
-tracks_table = dynamodb.Table('yt_tracks')
-
+tracks_table = dynamodb.Table('mirrorfm_yt_tracks')
 
 # Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
@@ -135,8 +133,8 @@ def get_spotify():
 def find_on_spotify(sp, track_name):
     try:
         results = sp.search(track_name, limit=1, type='track')
-        for _, t in enumerate(results['tracks']['items']):
-            return t['uri']
+        for _, spotify_track in enumerate(results['tracks']['items']):
+            return spotify_track
     except Exception as e:
         raise e
 
@@ -144,7 +142,7 @@ def find_on_spotify(sp, track_name):
 def get_last_playlist_for_channel(channel_id):
     res = playlists_table.query(
         ScanIndexForward=False,
-        KeyConditionExpression=Key('channel_id').eq(channel_id),
+        KeyConditionExpression=Key('yt_channel_id').eq(channel_id),
         Limit=1
     )
     if res['Count'] == 0:
@@ -165,7 +163,7 @@ def create_playlist_for_channel(sp, channel_id):
 
     playlists_table.put_item(
         Item={
-            'channel_id': channel_id,
+            'yt_channel_id': channel_id,
             'num': num,
             'spotify_playlist': res['id']
         }
@@ -201,25 +199,44 @@ def handle(event, context):
     if 'Records' in event:
         for record in event['Records']:
             record = record['dynamodb']
+
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
                 record = record['NewImage']
-                spotify_track = find_on_spotify(sp, record['track_name']['S'])
-                if spotify_track:
-                    spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track, record['channel_id']['S'])
+                spotify_track_info = find_on_spotify(sp, record['yt_track_name']['S'])
+
+                if spotify_track_info:
+                    spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id']['S'])
                     tracks_table.update_item(
                         Key={
-                            'channel_id': record['channel_id']['S'],
-                            'track_id': record['track_id']['S']
+                            'yt_channel_id': record['yt_channel_id']['S'],
+                            'yt_track_id': record['yt_track_id']['S']
                         },
-                        UpdateExpression="set spotify_uri = :spotify_uri, spotify_playlist = :spotify_playlist, spotify_found_time = :spotify_found_time",
+                        UpdateExpression="set spotify_uri = :spotify_uri,\
+                            spotify_playlist = :spotify_playlist,\
+                            spotify_found_time = :spotify_found_time,\
+                            yt_track_name = :yt_track_name,\
+                            spotify_track_info = :spotify_track_info",
                         ExpressionAttributeValues={
-                            ':spotify_uri': spotify_track,
+                            ':spotify_uri': spotify_track_info['uri'],
                             ':spotify_playlist': spotify_playlist,
-                            ':spotify_found_time': datetime.now(timezone.utc).isoformat()
+                            ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
+                            ':yt_track_name': record['yt_track_name']['S'],
+                            ':spotify_track_info': spotify_track_info
                         }
                     )
+    else:
+        # loop
+        pass
 
 
 if __name__ == "__main__":
+    ### Quick tests
+
+    # Do nothing
     # handle({}, {})
-    handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'channel_id': {u'S': u'UC6qQOTx9LuKMC5p2dbjmSRg'}, u'track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'track_name': {u'S': u'eminem collapse'}, u'spotify_uri': {u'S': u'hi'}, u'name': {u'S': u'Markus Homm - Discovery'}, u'channel_id': {u'S': u'UC6qQOTx9LuKMC5p2dbjmSRg'}, u'track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})
+
+    # w/o Spotify URI -> add
+    # handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'yt_track_name': {u'S': u'eminem collapse'}, u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})
+
+    # w/  Spotify URI -> don't add
+    # handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'yt_track_name': {u'S': u'eminem collapse'}, u'spotify_uri': {u'S': u'hi'}, u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})

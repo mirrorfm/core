@@ -1,0 +1,1 @@
+    apex build from-youtube >/dev/null && apex deploy from-youtube --region eu-west-1 -ldebug --env-file ./functions/from-youtube/env.json
