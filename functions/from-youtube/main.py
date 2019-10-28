@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 # DB
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
+mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
 
 scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
@@ -36,12 +37,51 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
+def get_next_yt_channel():
+    return mirrorfm_channels.query(
+        Limit=1,
+        KeyConditionExpression=Key('host').eq('yt'))
+
+
 def handle(event, context):
-    print(event)
-    if event['Records'][0]['eventName'] != "INSERT":
+    if 'Records' in event and event['Records'][0]['eventName'] != "INSERT":
+        print(event)
         # Only respond to new entries, not updates
-        return event['Records'][0]['eventName']
-    channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
+        return True
+
+    exclusive_start_yt_key = mirrorfm_cursors.get_item(
+        Key={
+            'name': 'exclusive_start_yt_key'
+        },
+        AttributesToGet=[
+            'value'
+        ]
+    )
+
+    if 'Item' in exclusive_start_yt_key:
+        response = mirrorfm_channels.query(
+            Limit=1,
+            ExclusiveStartKey=exclusive_start_yt_key['Item']['value'],
+            KeyConditionExpression=Key('host').eq('yt'))
+    else:
+        # no cursor, query first
+        response = get_next_yt_channel()
+
+    if 'LastEvaluatedKey' in response:
+        exclusive_start_yt_key = response['LastEvaluatedKey']
+        mirrorfm_cursors.put_item(
+            Item={
+                'name': 'exclusive_start_yt_key',
+                'value': exclusive_start_yt_key
+            }
+        )
+    else:
+        # end of list, query first
+        print("Start from beginning again")
+        response = get_next_yt_channel()
+
+    channel_id = response['Items'][0]['channel_id']
+
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -126,6 +166,7 @@ def handle(event, context):
 
     print(next_last_upload_datetime_str)
 
+    i = 1
     for items in chunks(new_items_desc, 25):
         dynamodb.batch_write_item(RequestItems={
             'mirrorfm_yt_tracks': [{ 'PutRequest': { 'Item': {
@@ -135,7 +176,8 @@ def handle(event, context):
                 'yt_published_at': item['snippet']['publishedAt']
             }}} for item in items]
         })
-        print("Batch sent")
+        i += 1
+        print("Batch sent %d/%d" % ((i * 25), len(new_items_desc)))
 
 
     # Update channel row with last_upload_datetime
