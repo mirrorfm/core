@@ -17,6 +17,10 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
 
+# Hide warnings https://github.com/googleapis/google-api-python-client/issues/299
+import logging
+logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
+
 # DB
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
@@ -44,43 +48,45 @@ def get_next_yt_channel():
 
 
 def handle(event, context):
-    if 'Records' in event and event['Records'][0]['eventName'] != "INSERT":
+    if 'Records' in event:
+        if  event['Records'][0]['eventName'] != "INSERT":
+            return
+         # Only respond to new entries, not updates
         print(event)
-        # Only respond to new entries, not updates
-        return True
-
-    exclusive_start_yt_key = mirrorfm_cursors.get_item(
-        Key={
-            'name': 'exclusive_start_yt_key'
-        },
-        AttributesToGet=[
-            'value'
-        ]
-    )
-
-    if 'Item' in exclusive_start_yt_key:
-        response = mirrorfm_channels.query(
-            Limit=1,
-            ExclusiveStartKey=exclusive_start_yt_key['Item']['value'],
-            KeyConditionExpression=Key('host').eq('yt'))
+        channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
     else:
-        # no cursor, query first
-        response = get_next_yt_channel()
-
-    if 'LastEvaluatedKey' in response:
-        exclusive_start_yt_key = response['LastEvaluatedKey']
-        mirrorfm_cursors.put_item(
-            Item={
-                'name': 'exclusive_start_yt_key',
-                'value': exclusive_start_yt_key
-            }
+        exclusive_start_yt_key = mirrorfm_cursors.get_item(
+            Key={
+                'name': 'exclusive_start_yt_key'
+            },
+            AttributesToGet=[
+                'value'
+            ]
         )
-    else:
-        # end of list, query first
-        print("Start from beginning again")
-        response = get_next_yt_channel()
 
-    channel_id = response['Items'][0]['channel_id']
+        if 'Item' in exclusive_start_yt_key:
+            response = mirrorfm_channels.query(
+                Limit=1,
+                ExclusiveStartKey=exclusive_start_yt_key['Item']['value'],
+                KeyConditionExpression=Key('host').eq('yt'))
+        else:
+            # no cursor, query first
+            response = get_next_yt_channel()
+
+        if 'LastEvaluatedKey' in response:
+            exclusive_start_yt_key = response['LastEvaluatedKey']
+            mirrorfm_cursors.put_item(
+                Item={
+                    'name': 'exclusive_start_yt_key',
+                    'value': exclusive_start_yt_key
+                }
+            )
+        else:
+            # end of list, query first
+            print("Start from beginning again")
+            response = get_next_yt_channel()
+
+        channel_id = response['Items'][0]['channel_id']
 
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
