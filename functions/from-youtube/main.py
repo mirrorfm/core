@@ -64,17 +64,18 @@ def handle(event, context):
             ]
         )
 
-        if 'Item' in exclusive_start_yt_key:
-            response = mirrorfm_channels.query(
+        if 'Item' in exclusive_start_yt_key and exclusive_start_yt_key['Item'] != {}:
+            channel_info = mirrorfm_channels.query(
                 Limit=1,
                 ExclusiveStartKey=exclusive_start_yt_key['Item']['value'],
                 KeyConditionExpression=Key('host').eq('yt'))
+
         else:
             # no cursor, query first
-            response = get_next_yt_channel()
+            channel_info = get_next_yt_channel()
 
-        if 'LastEvaluatedKey' in response:
-            exclusive_start_yt_key = response['LastEvaluatedKey']
+        if 'LastEvaluatedKey' in channel_info:
+            exclusive_start_yt_key = channel_info['LastEvaluatedKey']
             mirrorfm_cursors.put_item(
                 Item={
                     'name': 'exclusive_start_yt_key',
@@ -82,46 +83,46 @@ def handle(event, context):
                 }
             )
         else:
-            # end of list, query first
-            print("Start from beginning again")
-            response = get_next_yt_channel()
-
-        channel_id = response['Items'][0]['channel_id']
+            mirrorfm_cursors.delete_item(
+                Key={
+                    'name': 'exclusive_start_yt_key'
+                }
+            )
+            return
 
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-    print(channel_id)
-    youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
-
-    channel_info = mirrorfm_channels.get_item(
-        Key={
-            'host': 'yt',
-            'channel_id': channel_id
-        },
-        AttributesToGet=[
-            'last_upload_datetime',
-            'upload_playlist_id',
-            'count_tracks'
-        ]
-    )
+    print(channel_info)
     upload_playlist_id = None
     last_upload_datetime = None
     old_yt_count_tracks = 0
-    if 'Item' in channel_info:
-        channel_info = channel_info['Item']
+    if 'Items' in channel_info:
+        channel_info = channel_info['Items'][0]
+        channel_id = channel_info['channel_id']
+        print(channel_id)
         if 'last_upload_datetime' in channel_info:
             last_upload_datetime = get_datetime_from_iso8601_string(channel_info['last_upload_datetime'])
         if 'upload_playlist_id' in channel_info:
             upload_playlist_id = channel_info['upload_playlist_id']
         if 'count_tracks' in channel_info:
             old_yt_count_tracks = channel_info['count_tracks']
+
+    print(last_upload_datetime)
+    print(upload_playlist_id)
+    print(old_yt_count_tracks)
+    youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
+
     if not upload_playlist_id:
-        response = youtube.channels().list(
-            part="contentDetails,snippet",
-            id=channel_id
-        ).execute()
+        try:
+            response = youtube.channels().list(
+                part="contentDetails,snippet",
+                id=channel_id
+            ).execute()
+        except Exception as e:
+            print(e)
+            return
 
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
         channel_name = response['items'][0]['snippet']['title']
@@ -144,12 +145,15 @@ def handle(event, context):
 
     if True:
         while True:
-            response = youtube.playlistItems().list(
-                part="contentDetails,snippet",
-                playlistId=upload_playlist_id,
-                maxResults=50,
-                pageToken=pageToken
-            ).execute()
+            try:
+                response = youtube.playlistItems().list(
+                    part="contentDetails,snippet",
+                    playlistId=upload_playlist_id,
+                    maxResults=50,
+                    pageToken=pageToken
+                ).execute()
+            except Exception as e:
+                return
             for item in response['items']:
                 item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt'])
                 if item_datetime > last_upload_datetime:
@@ -183,7 +187,7 @@ def handle(event, context):
             }}} for item in items]
         })
         i += 1
-        print("Batch sent %d/%d" % ((i * 25), len(new_items_desc)))
+        print("Batch sent %d/%d" % (i * 25, new_items_desc))
 
 
     # Update channel row with last_upload_datetime
