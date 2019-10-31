@@ -41,19 +41,25 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
-def get_next_yt_channel():
-    return mirrorfm_channels.query(
-        Limit=1,
-        KeyConditionExpression=Key('host').eq('yt'))
-
-
 def handle(event, context):
+
     if 'Records' in event:
         if  event['Records'][0]['eventName'] != "INSERT":
             return
          # Only respond to new entries, not updates
         print(event)
+
         channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
+        channel_info = mirrorfm_channels.get_item(
+            Key={
+                'host': 'yt',
+                'channel_id': channel_id
+            }
+        )
+        if 'Item' in channel_info:
+            channel_info = channel_info['Item']
+        else:
+            channel_info = None
     else:
         exclusive_start_yt_key = mirrorfm_cursors.get_item(
             Key={
@@ -72,8 +78,9 @@ def handle(event, context):
 
         else:
             # no cursor, query first
-            channel_info = get_next_yt_channel()
-
+            channel_info = mirrorfm_channels.query(
+                Limit=1,
+                KeyConditionExpression=Key('host').eq('yt'))
         if 'LastEvaluatedKey' in channel_info:
             exclusive_start_yt_key = channel_info['LastEvaluatedKey']
             mirrorfm_cursors.put_item(
@@ -89,17 +96,14 @@ def handle(event, context):
                 }
             )
             return
-
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        channel_info = channel_info['Items'][0]
 
     print(channel_info)
     upload_playlist_id = None
     last_upload_datetime = None
     old_yt_count_tracks = 0
-    if 'Items' in channel_info:
-        channel_info = channel_info['Items'][0]
+
+    if channel_info:
         channel_id = channel_info['channel_id']
         print(channel_id)
         if 'last_upload_datetime' in channel_info:
@@ -109,9 +113,15 @@ def handle(event, context):
         if 'count_tracks' in channel_info:
             old_yt_count_tracks = channel_info['count_tracks']
 
+
     print(last_upload_datetime)
     print(upload_playlist_id)
     print(old_yt_count_tracks)
+
+    # Disable OAuthlib's HTTPS verification when running locally.
+    # *DO NOT* leave this option enabled in production.
+    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
     youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
 
     if not upload_playlist_id:
@@ -187,7 +197,7 @@ def handle(event, context):
             }}} for item in items]
         })
         i += 1
-        print("Batch sent %d/%d" % (i * 25, new_items_desc))
+        print("Batch sent %d/%d" % (i * 25, len(new_items_desc)))
 
 
     # Update channel row with last_upload_datetime
@@ -208,3 +218,4 @@ def handle(event, context):
 
 if __name__ == "__main__":
     handle({}, {})
+    # handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCiVQcdqc3sRg12nxPjnuGbQ'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCiVQcdqc3sRg12nxPjnuGbQ'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
