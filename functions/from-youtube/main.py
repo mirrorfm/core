@@ -75,7 +75,6 @@ def handle(event, context):
                 Limit=1,
                 ExclusiveStartKey=exclusive_start_yt_channel_key['Item']['value'],
                 KeyConditionExpression=Key('host').eq('yt'))
-
         else:
             # no cursor, query first
             channel_info = mirrorfm_channels.query(

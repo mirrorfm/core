@@ -1,5 +1,3 @@
-- loop over yt_tracks with query
 - do not add duplicates
 - improve search / test
-- optimise ddb stream with insert / update
 - use YT username instead of ID (or both)

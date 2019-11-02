@@ -17,6 +17,9 @@ sys.path.append(module_path)
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
+from boto3.dynamodb.types import TypeDeserializer
+
+deser = TypeDeserializer()
 
 import json
 import decimal
@@ -80,6 +83,25 @@ SPOTIPY_REDIRECT_URI = 'http://localhost/'
 scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
 
 
+def get_cursor(name):
+    return cursors_table.get_item(
+        Key={
+            'name': name
+        },
+        AttributesToGet=[
+            'value'
+        ]
+    )
+
+
+def set_cursor(name, position):
+    cursors_table.put_item(
+        Item={
+            'name': name,
+            'value': position
+        }
+    )
+
 def restore_spotify_token():
     res = cursors_table.get_item(
         Key={
@@ -98,7 +120,7 @@ def restore_spotify_token():
                                   ensure_ascii=False,
                                   cls=DecimalEncoder))
 
-    print("Restored token: %s" % token)
+    # print("Restored token: %s" % token)
 
 
 def store_spotify_token(token_info):
@@ -108,7 +130,7 @@ def store_spotify_token(token_info):
             'value': token_info
         }
     )
-    print("Stored token: %s" % token_info)
+    # print("Stored token: %s" % token_info)
 
 
 def get_spotify():
@@ -157,7 +179,6 @@ def create_playlist_for_channel(sp, channel_id):
         KeyConditionExpression=Key('host').eq('yt') & Key('channel_id').eq(channel_id),
         Limit=1
     )
-    print(res)
     channel_name = res['Items'][0]['channel_name']
     res = sp.user_playlist_create(SPOTIPY_USER, channel_name, public=True)
 
@@ -192,41 +213,97 @@ def parse_event_song(record):
         return int(record['dynamodb']['Keys']['id']['N'])
 
 
+def spotify_lookup(sp, record):
+    spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
+
+    if spotify_track_info:
+        print(spotify_track_info)
+        spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
+        tracks_table.update_item(
+            Key={
+                'yt_channel_id': record['yt_channel_id'],
+                'yt_track_composite': record['yt_track_composite']
+            },
+            UpdateExpression="set spotify_uri = :spotify_uri,\
+                spotify_playlist = :spotify_playlist,\
+                spotify_found_time = :spotify_found_time,\
+                yt_track_name = :yt_track_name,\
+                spotify_track_info = :spotify_track_info",
+            ExpressionAttributeValues={
+                ':spotify_uri': spotify_track_info['uri'],
+                ':spotify_playlist': spotify_playlist,
+                ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
+                ':yt_track_name': record['yt_track_name'],
+                ':spotify_track_info': spotify_track_info
+            }
+        )
+
+
 def handle(event, context):
     print(event)
+    if event != None and event != {}:  # TODO can it be None?
+        event = deser.deserialize(event)
     sp = get_spotify()
 
     if 'Records' in event:
         for record in event['Records']:
             record = record['dynamodb']
-
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
-                record = record['NewImage']
-                spotify_track_info = find_on_spotify(sp, record['yt_track_name']['S'])
-
-                if spotify_track_info:
-                    spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id']['S'])
-                    tracks_table.update_item(
-                        Key={
-                            'yt_channel_id': record['yt_channel_id']['S'],
-                            'yt_track_composite': record['yt_track_composite']['S']
-                        },
-                        UpdateExpression="set spotify_uri = :spotify_uri,\
-                            spotify_playlist = :spotify_playlist,\
-                            spotify_found_time = :spotify_found_time,\
-                            yt_track_name = :yt_track_name,\
-                            spotify_track_info = :spotify_track_info",
-                        ExpressionAttributeValues={
-                            ':spotify_uri': spotify_track_info['uri'],
-                            ':spotify_playlist': spotify_playlist,
-                            ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
-                            ':yt_track_name': record['yt_track_name']['S'],
-                            ':spotify_track_info': spotify_track_info
-                        }
-                    )
+                spotify_lookup(sp, record['NewImage'])
     else:
-        # loop
-        pass
+        # rediscover channels
+        exclusive_start_yt_channel_track_key = get_cursor('exclusive_start_yt_channel_track_key')
+        if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
+            channel_info = mirrorfm_channels.query(
+                Limit=1,
+                ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
+                KeyConditionExpression=Key('host').eq('yt'))
+        else:
+            # no cursor, query first
+            channel_info = mirrorfm_channels.query(
+                Limit=1,
+                KeyConditionExpression=Key('host').eq('yt'))
+        channel_last = channel_info['LastEvaluatedKey']
+        channel_info = channel_info['Items'][0]
+        channel_id = channel_info['channel_id']
+        print(channel_id)
+
+        # rediscover tracks
+        exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
+        print(exclusive_start_yt_track_key)
+        if 'Item' in exclusive_start_yt_track_key:
+            tracks = tracks_table.query(
+                Limit=500,
+                FilterExpression="attribute_not_exists(spotify_found_time)",
+                ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
+                KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+        else:
+            # no cursor, query first
+            tracks = tracks_table.query(
+                Limit=500,
+                FilterExpression="attribute_not_exists(spotify_found_time)",
+                KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+
+        for record in tracks['Items']:
+            spotify_lookup(sp, record)
+
+        print(channel_last)
+        if 'LastEvaluatedKey' in tracks:
+            set_cursor('exclusive_start_yt_track_key', tracks['LastEvaluatedKey'])
+        else:
+            cursors_table.delete_item(
+                Key={
+                    'name': 'exclusive_start_yt_track_key'
+                }
+            )
+            if channel_last:
+                set_cursor('exclusive_start_yt_channel_track_key', channel_last)
+            else:
+                cursors_table.delete_item(
+                    Key={
+                        'name': 'exclusive_start_yt_channel_track_key'
+                    }
+                )
 
 
 if __name__ == "__main__":
