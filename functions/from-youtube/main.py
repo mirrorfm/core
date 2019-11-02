@@ -61,19 +61,19 @@ def handle(event, context):
         else:
             channel_info = None
     else:
-        exclusive_start_yt_key = mirrorfm_cursors.get_item(
+        exclusive_start_yt_channel_key = mirrorfm_cursors.get_item(
             Key={
-                'name': 'exclusive_start_yt_key'
+                'name': 'exclusive_start_yt_channel_key'
             },
             AttributesToGet=[
                 'value'
             ]
         )
 
-        if 'Item' in exclusive_start_yt_key and exclusive_start_yt_key['Item'] != {}:
+        if 'Item' in exclusive_start_yt_channel_key and exclusive_start_yt_channel_key['Item'] != {}:
             channel_info = mirrorfm_channels.query(
                 Limit=1,
-                ExclusiveStartKey=exclusive_start_yt_key['Item']['value'],
+                ExclusiveStartKey=exclusive_start_yt_channel_key['Item']['value'],
                 KeyConditionExpression=Key('host').eq('yt'))
 
         else:
@@ -82,17 +82,17 @@ def handle(event, context):
                 Limit=1,
                 KeyConditionExpression=Key('host').eq('yt'))
         if 'LastEvaluatedKey' in channel_info:
-            exclusive_start_yt_key = channel_info['LastEvaluatedKey']
+            exclusive_start_yt_channel_key = channel_info['LastEvaluatedKey']
             mirrorfm_cursors.put_item(
                 Item={
-                    'name': 'exclusive_start_yt_key',
-                    'value': exclusive_start_yt_key
+                    'name': 'exclusive_start_yt_channel_key',
+                    'value': exclusive_start_yt_channel_key
                 }
             )
         else:
             mirrorfm_cursors.delete_item(
                 Key={
-                    'name': 'exclusive_start_yt_key'
+                    'name': 'exclusive_start_yt_channel_key'
                 }
             )
             return
@@ -191,6 +191,7 @@ def handle(event, context):
         dynamodb.batch_write_item(RequestItems={
             'mirrorfm_yt_tracks': [{ 'PutRequest': { 'Item': {
                 'yt_channel_id': channel_id,
+                'yt_track_composite': '-'.join([item['snippet']['publishedAt'], item['id']]),
                 'yt_track_id': item['id'],
                 'yt_track_name': str(item['snippet']['title']),
                 'yt_published_at': item['snippet']['publishedAt']

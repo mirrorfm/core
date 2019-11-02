@@ -209,7 +209,7 @@ def handle(event, context):
                     tracks_table.update_item(
                         Key={
                             'yt_channel_id': record['yt_channel_id']['S'],
-                            'yt_track_id': record['yt_track_id']['S']
+                            'yt_track_composite': record['yt_track_composite']['S']
                         },
                         UpdateExpression="set spotify_uri = :spotify_uri,\
                             spotify_playlist = :spotify_playlist,\
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     ### Quick tests
 
     # Do nothing
-    # handle({}, {})
+    handle({}, {})
 
     # w/o Spotify URI -> add
     # handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'yt_track_name': {u'S': u'eminem collapse'}, u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})
