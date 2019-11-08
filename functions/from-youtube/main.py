@@ -11,7 +11,9 @@ sys.path.append(module_path)
 import traceback
 from pprint import pprint
 from googleapiclient import discovery
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import time
+
 import dateutil.parser
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
@@ -35,32 +37,40 @@ def get_datetime_from_iso8601_string(s):
     return dateutil.parser.parse(s)
 
 
+def datetime_to_zulu(utc_datetime):
+    return utc_datetime.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
 def chunks(l, n):
     """Yield successive n-sized chunks from l."""
     for i in range(0, len(l), n):
         yield l[i:i + n]
 
 
+def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime):
+    item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt'])
+    if item_datetime > last_upload_datetime:
+        print(item['id'] + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
+        new_items_desc.append(item)
+        if item_datetime > next_last_upload_datetime:
+            return item_datetime
+    return next_last_upload_datetime
+
+
 def handle(event, context):
+    upload_playlist_id = None
+    last_upload_datetime = None
+    old_yt_count_tracks = 0
 
     if 'Records' in event:
-        if  event['Records'][0]['eventName'] != "INSERT":
+        # A channel_id was added to the `mirrorfm_channels` dynamodb table
+        if event['Records'][0]['eventName'] != "INSERT":
+            # Ignore row updates
             return
-         # Only respond to new entries, not updates
         print(event)
-
         channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
-        channel_info = mirrorfm_channels.get_item(
-            Key={
-                'host': 'yt',
-                'channel_id': channel_id
-            }
-        )
-        if 'Item' in channel_info:
-            channel_info = channel_info['Item']
-        else:
-            channel_info = None
     else:
+        # The lambda was triggered by CRON
         exclusive_start_yt_channel_key = mirrorfm_cursors.get_item(
             Key={
                 'name': 'exclusive_start_yt_channel_key'
@@ -80,6 +90,8 @@ def handle(event, context):
             channel_info = mirrorfm_channels.query(
                 Limit=1,
                 KeyConditionExpression=Key('host').eq('yt'))
+
+        # Only do this if successful
         if 'LastEvaluatedKey' in channel_info:
             exclusive_start_yt_channel_key = channel_info['LastEvaluatedKey']
             mirrorfm_cursors.put_item(
@@ -94,17 +106,10 @@ def handle(event, context):
                     'name': 'exclusive_start_yt_channel_key'
                 }
             )
+            # TODO could re-try instead of stopping
             return
         channel_info = channel_info['Items'][0]
-
-    print(channel_info)
-    upload_playlist_id = None
-    last_upload_datetime = None
-    old_yt_count_tracks = 0
-
-    if channel_info:
         channel_id = channel_info['channel_id']
-        print(channel_id)
         if 'last_upload_datetime' in channel_info:
             last_upload_datetime = get_datetime_from_iso8601_string(channel_info['last_upload_datetime'])
         if 'upload_playlist_id' in channel_info:
@@ -120,10 +125,10 @@ def handle(event, context):
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-
     youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
 
     if not upload_playlist_id:
+        # Get "Uploads" playlist_id of the channel
         try:
             response = youtube.channels().list(
                 part="contentDetails,snippet",
@@ -144,48 +149,60 @@ def handle(event, context):
                 'upload_playlist_id': upload_playlist_id,
             }
         )
+
     if not last_upload_datetime:
+        process_full_list = True
         last_upload_datetime = datetime.min.replace(tzinfo=timezone.utc)
+    else:
+        process_full_list = False
 
     next_last_upload_datetime = last_upload_datetime
-    next_last_upload_datetime_str = ""
     pageToken = ""
     new_items_desc = []
 
-    if True:
+    if process_full_list:
         while True:
             try:
                 response = youtube.playlistItems().list(
-                    part="contentDetails,snippet",
+                    part="snippet",
                     playlistId=upload_playlist_id,
                     maxResults=50,
                     pageToken=pageToken
                 ).execute()
             except Exception as e:
+                print(e)
                 return
             for item in response['items']:
-                item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt'])
-                if item_datetime > last_upload_datetime:
-                    print(item['id'] + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
-                    new_items_desc.append(item)
-                    if item_datetime > next_last_upload_datetime:
-                        next_last_upload_datetime = item_datetime
-                        next_last_upload_datetime_str = item['snippet']['publishedAt']
+                next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime)
             if 'nextPageToken' in response:
                 pageToken = response['nextPageToken']
             else:
                 break
-        # YT API does not allow ASC
+        # Reverse because YT API does not allow ASC
         # https://stackoverflow.com/a/22898075/1515819
         new_items_desc.reverse()
     else:
-        # TODO-1: use getActivities to only get newly added tracks
-        # https://stackoverflow.com/a/23286845/1515819
-        pass
+        while True:
+            try:
+                response = youtube.activities().list(
+                    part="snippet",
+                    channelId=channel_id,
+                    maxResults=50,
+                    pageToken=pageToken,
+                    publishedAfter=datetime_to_zulu(last_upload_datetime)
+                ).execute()
+            except Exception as e:
+                print(e)
+                return
+            for item in response['items']:
+                if item['snippet']['type'] == 'upload':
+                    next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime)
+            if 'nextPageToken' in response:
+                pageToken = response['nextPageToken']
+            else:
+                break
 
-    print(next_last_upload_datetime_str)
-
-    i = 1
+    i = 0
     for items in chunks(new_items_desc, 25):
         dynamodb.batch_write_item(RequestItems={
             'mirrorfm_yt_tracks': [{ 'PutRequest': { 'Item': {
@@ -197,12 +214,11 @@ def handle(event, context):
             }}} for item in items]
         })
         i += 1
-        print("Batch sent %d/%d" % (i * 25, len(new_items_desc)))
-
+        print("Batch sent %d/%d" % (i * 25, int(len(new_items_desc) / 25 + 1) * 25))
 
     # Update channel row with last_upload_datetime
-    # will be used for TODO-1
-    if next_last_upload_datetime_str:
+    if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
+        print(next_last_upload_datetime)
         mirrorfm_channels.update_item(
             Key={
                 'host': 'yt',
@@ -210,10 +226,12 @@ def handle(event, context):
             },
             UpdateExpression="set last_upload_datetime = :last_upload_datetime, count_tracks = :count_tracks",
             ExpressionAttributeValues={
-                ':last_upload_datetime': next_last_upload_datetime_str,
+                ':last_upload_datetime': datetime_to_zulu(next_last_upload_datetime),
                 ':count_tracks': old_yt_count_tracks + len(new_items_desc)
             }
         )
+    else:
+        print("No new tracks")
 
 
 if __name__ == "__main__":

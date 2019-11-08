@@ -206,13 +206,6 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     return spotify_playlist
 
 
-def parse_event_song(record):
-    if record['eventSource'] == "aws:dynamodb" \
-       and record['eventName'] == "INSERT" \
-       and record['dynamodb']['Keys']['host']['S'] == HOST:
-        return int(record['dynamodb']['Keys']['id']['N'])
-
-
 def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
@@ -241,18 +234,20 @@ def spotify_lookup(sp, record):
 
 def handle(event, context):
     print(event)
-    if event != None and event != {}:  # TODO can it be None?
-        event = deser.deserialize(event)
     sp = get_spotify()
 
     if 'Records' in event:
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
-                spotify_lookup(sp, record['NewImage'])
+                d = {}
+                for key in record['NewImage']:
+                    d[key] = deser.deserialize(record['NewImage'][key])
+                spotify_lookup(sp, d)
     else:
         # rediscover channels
         exclusive_start_yt_channel_track_key = get_cursor('exclusive_start_yt_channel_track_key')
+        print(exclusive_start_yt_channel_track_key)
         if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
             channel_info = mirrorfm_channels.query(
                 Limit=1,
@@ -263,14 +258,17 @@ def handle(event, context):
             channel_info = mirrorfm_channels.query(
                 Limit=1,
                 KeyConditionExpression=Key('host').eq('yt'))
-        channel_last = channel_info['LastEvaluatedKey']
-        channel_info = channel_info['Items'][0]
-        channel_id = channel_info['channel_id']
+        if len(channel_info['Items']) == 0:
+            # First YT channel parsing didn't succeed/terminate?
+            return
+        print(channel_info)
+        channel_id = channel_info['Items'][0]['channel_id']
         print(channel_id)
 
         # rediscover tracks
         exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
         print(exclusive_start_yt_track_key)
+
         if 'Item' in exclusive_start_yt_track_key:
             tracks = tracks_table.query(
                 Limit=500,
@@ -287,7 +285,6 @@ def handle(event, context):
         for record in tracks['Items']:
             spotify_lookup(sp, record)
 
-        print(channel_last)
         if 'LastEvaluatedKey' in tracks:
             set_cursor('exclusive_start_yt_track_key', tracks['LastEvaluatedKey'])
         else:
@@ -296,8 +293,8 @@ def handle(event, context):
                     'name': 'exclusive_start_yt_track_key'
                 }
             )
-            if channel_last:
-                set_cursor('exclusive_start_yt_channel_track_key', channel_last)
+            if 'LastEvaluatedKey' in channel_info:
+                set_cursor('exclusive_start_yt_channel_track_key', channel_info['LastEvaluatedKey'])
             else:
                 cursors_table.delete_item(
                     Key={
