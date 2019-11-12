@@ -61,10 +61,10 @@ class Memoize:
         return self.memo[args]
 
 
-LAMBDA_EXEC_TIME = 110
 PLAYLIST_EXPECTED_MAX_LENGTH = 11000
 WEBSITE = "https://mirror.fm"
 HOST = "yt"
+BATCH_GET_SIZE = 500
 
 # DB
 client = boto3.client("dynamodb", region_name='eu-west-1')
@@ -102,6 +102,7 @@ def set_cursor(name, position):
         }
     )
 
+
 def restore_spotify_token():
     res = cursors_table.get_item(
         Key={
@@ -119,7 +120,6 @@ def restore_spotify_token():
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
                                   cls=DecimalEncoder))
-
     # print("Restored token: %s" % token)
 
 
@@ -198,7 +198,7 @@ def get_playlist_for_channel(sp, channel_id):
 
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
-    spotify_playlist, playlist_num = get_playlist_for_channel(sp, channel_id)
+    spotify_playlist, _playlist_num = get_playlist_for_channel(sp, channel_id)
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],
@@ -210,7 +210,7 @@ def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
     if spotify_track_info:
-        print(spotify_track_info)
+        print(record['yt_track_name'], "->", spotify_track_info['artists'][0]['name'], spotify_track_info['name'], "/", spotify_track_info['uri'])
         spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
         tracks_table.update_item(
             Key={
@@ -232,75 +232,91 @@ def spotify_lookup(sp, record):
         )
 
 
+def get_current_or_next_channel():
+    exclusive_start_yt_channel_track_key = get_cursor('exclusive_start_yt_channel_track_key')
+    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
+        channel_to_process = mirrorfm_channels.query(
+            Limit=1,
+            ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
+            KeyConditionExpression=Key('host').eq('yt'))
+    else:
+        # no cursor, query first
+        channel_to_process = mirrorfm_channels.query(
+            Limit=1,
+            KeyConditionExpression=Key('host').eq('yt'))
+
+    if 'LastEvaluatedKey' not in channel_to_process:
+        print("No next channel, re-initialize cursor")
+        cursors_table.delete_item(
+            Key={
+                'name': 'exclusive_start_yt_channel_track_key'
+            }
+        )
+        return get_current_or_next_channel()
+    return channel_to_process
+
+
+def save_cursors(just_processed_tracks, just_processed_channel):
+    if 'LastEvaluatedKey' in just_processed_tracks:
+        set_cursor('exclusive_start_yt_track_key', just_processed_tracks['LastEvaluatedKey'])
+    else:
+        cursors_table.delete_item(
+            Key={
+                'name': 'exclusive_start_yt_track_key'
+            }
+        )
+        if 'LastEvaluatedKey' in just_processed_channel:
+            set_cursor('exclusive_start_yt_channel_track_key', just_processed_channel['LastEvaluatedKey'])
+
+
+def get_next_tracks(channel_id):
+    exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
+    if 'Item' in exclusive_start_yt_track_key:
+        print("Starting from track", exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
+        return tracks_table.query(
+            Limit=BATCH_GET_SIZE,
+            FilterExpression="attribute_not_exists(spotify_found_time)",
+            ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
+            KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+    else:
+        print("Starting from first track")
+        return tracks_table.query(
+            Limit=BATCH_GET_SIZE,
+            FilterExpression="attribute_not_exists(spotify_found_time)",
+            KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+
+
+def deserialize_record(record):
+    d = {}
+    for key in record['NewImage']:
+        d[key] = deser.deserialize(record['NewImage'][key])
+    return d
+
+
 def handle(event, context):
-    print(event)
     sp = get_spotify()
 
     if 'Records' in event:
+        # New tracks
+        print("Process %d tracks just added to DynamoDB" % len(event['Records']))
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
-                d = {}
-                for key in record['NewImage']:
-                    d[key] = deser.deserialize(record['NewImage'][key])
-                spotify_lookup(sp, d)
+                spotify_lookup(sp, deserialize_record(record))
     else:
-        # rediscover channels
-        exclusive_start_yt_channel_track_key = get_cursor('exclusive_start_yt_channel_track_key')
-        print(exclusive_start_yt_channel_track_key)
-        if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
-            channel_info = mirrorfm_channels.query(
-                Limit=1,
-                ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
-                KeyConditionExpression=Key('host').eq('yt'))
-        else:
-            # no cursor, query first
-            channel_info = mirrorfm_channels.query(
-                Limit=1,
-                KeyConditionExpression=Key('host').eq('yt'))
-        if len(channel_info['Items']) == 0:
-            # First YT channel parsing didn't succeed/terminate?
-            return
-        print(channel_info)
-        channel_id = channel_info['Items'][0]['channel_id']
-        print(channel_id)
+        # Rediscover tracks
+        channel_to_process = get_current_or_next_channel()
 
-        # rediscover tracks
-        exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
-        print(exclusive_start_yt_track_key)
+        channel_name = channel_to_process['Items'][0]['channel_name']
+        print("Rediscovering channel", channel_name)
 
-        if 'Item' in exclusive_start_yt_track_key:
-            tracks = tracks_table.query(
-                Limit=500,
-                FilterExpression="attribute_not_exists(spotify_found_time)",
-                ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
-                KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
-        else:
-            # no cursor, query first
-            tracks = tracks_table.query(
-                Limit=500,
-                FilterExpression="attribute_not_exists(spotify_found_time)",
-                KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+        channel_id = channel_to_process['Items'][0]['channel_id']
+        tracks_to_process = get_next_tracks(channel_id)
 
-        for record in tracks['Items']:
+        for record in tracks_to_process['Items']:
             spotify_lookup(sp, record)
 
-        if 'LastEvaluatedKey' in tracks:
-            set_cursor('exclusive_start_yt_track_key', tracks['LastEvaluatedKey'])
-        else:
-            cursors_table.delete_item(
-                Key={
-                    'name': 'exclusive_start_yt_track_key'
-                }
-            )
-            if 'LastEvaluatedKey' in channel_info:
-                set_cursor('exclusive_start_yt_channel_track_key', channel_info['LastEvaluatedKey'])
-            else:
-                cursors_table.delete_item(
-                    Key={
-                        'name': 'exclusive_start_yt_channel_track_key'
-                    }
-                )
+        save_cursors(tracks_to_process, channel_to_process)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ file_path = os.path.dirname(__file__)
 module_path = os.path.join(file_path, "env")
 sys.path.append(module_path)
 
-import traceback
 from pprint import pprint
 from googleapiclient import discovery
 from datetime import datetime, timezone, timedelta
