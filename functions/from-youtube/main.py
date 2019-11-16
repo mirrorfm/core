@@ -137,8 +137,12 @@ def handle(event, context):
             print(e)
             return
 
-        upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-        channel_name = response['items'][0]['snippet']['title']
+        try:
+            upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+            channel_name = response['items'][0]['snippet']['title']
+        except IndexError as e:
+            # Ignore malformatted event / channel_id
+            return
 
         mirrorfm_channels.put_item(
             Item={

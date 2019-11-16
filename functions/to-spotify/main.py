@@ -207,6 +207,7 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
 
 
 def spotify_lookup(sp, record):
+    print(record)
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
     if spotify_track_info:
