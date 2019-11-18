@@ -12,5 +12,6 @@ Sync YouTube music channels with Spotify playlists
 
 2 CRON jobs running on AWS Lambda:
 
+ - λ0 [`from-github`](functions/from-github/)
  - λ1 [`from-youtube`](functions/from-youtube/)
  - λ2 [`to-spotify`](functions/to-spotify/)
