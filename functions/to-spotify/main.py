@@ -73,6 +73,7 @@ cursors_table = dynamodb.Table('mirrorfm_cursors')
 playlists_table = dynamodb.Table('mirrorfm_yt_playlists')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
 tracks_table = dynamodb.Table('mirrorfm_yt_tracks')
+duplicates_table = dynamodb.Table('mirrorfm_yt_duplicates')
 
 # Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
@@ -197,12 +198,32 @@ def get_playlist_for_channel(sp, channel_id):
            create_playlist_for_channel(sp, channel_id)
 
 
+def is_track_duplicate(channel_id, track_spotify_uri):
+    return 'Item' in duplicates_table.get_item(
+        Key={
+            'yt_channel_id': channel_id,
+            'yt_track_id': track_spotify_uri
+        }
+    )
+
+
+def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist):
+    duplicates_table.put_item(
+        Item={
+            'host': 'ra',
+            'value': track_spotify_uri,
+            'spotify_playlist': spotify_playlist
+        }
+    )
+
+
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     spotify_playlist, _playlist_num = get_playlist_for_channel(sp, channel_id)
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],
                                 position=0)
+    add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist)
     return spotify_playlist
 
 
@@ -212,25 +233,30 @@ def spotify_lookup(sp, record):
 
     if spotify_track_info:
         print(record['yt_track_name'], "->", spotify_track_info['artists'][0]['name'], spotify_track_info['name'], "/", spotify_track_info['uri'])
-        spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
-        tracks_table.update_item(
-            Key={
-                'yt_channel_id': record['yt_channel_id'],
-                'yt_track_composite': record['yt_track_composite']
-            },
-            UpdateExpression="set spotify_uri = :spotify_uri,\
-                spotify_playlist = :spotify_playlist,\
-                spotify_found_time = :spotify_found_time,\
-                yt_track_name = :yt_track_name,\
-                spotify_track_info = :spotify_track_info",
-            ExpressionAttributeValues={
-                ':spotify_uri': spotify_track_info['uri'],
-                ':spotify_playlist': spotify_playlist,
-                ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
-                ':yt_track_name': record['yt_track_name'],
-                ':spotify_track_info': spotify_track_info
-            }
-        )
+        if is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
+            print("Duplicate!")
+        else:
+            # Safety duplicate check needed because
+            # some duplicates were found in some playlists for unknown reasons.
+            spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
+            tracks_table.update_item(
+                Key={
+                    'yt_channel_id': record['yt_channel_id'],
+                    'yt_track_composite': record['yt_track_composite']
+                },
+                UpdateExpression="set spotify_uri = :spotify_uri,\
+                    spotify_playlist = :spotify_playlist,\
+                    spotify_found_time = :spotify_found_time,\
+                    yt_track_name = :yt_track_name,\
+                    spotify_track_info = :spotify_track_info",
+                ExpressionAttributeValues={
+                    ':spotify_uri': spotify_track_info['uri'],
+                    ':spotify_playlist': spotify_playlist,
+                    ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
+                    ':yt_track_name': record['yt_track_name'],
+                    ':spotify_track_info': spotify_track_info
+                }
+            )
 
 
 def get_current_or_next_channel():
