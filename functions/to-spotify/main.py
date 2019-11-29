@@ -32,6 +32,8 @@ import spotipy
 import spotipy.util as util
 import spotipy.oauth2 as oauth2
 
+from trackfilter.cli import split_artist_track
+
 
 # custom exceptions
 class SpotifyAPILimitReached(Exception):
@@ -154,8 +156,14 @@ def get_spotify():
 
 
 def find_on_spotify(sp, track_name):
+    artist_and_track = split_artist_track(track_name)
+    if artist_and_track is not None and len(artist_and_track) > 1:
+        query = 'track:"{0[1]}"+artist:"{0[0]}"'.format(artist_and_track)
+    else:
+        print("[?]", track_name)
+        query = track_name
     try:
-        results = sp.search(track_name, limit=1, type='track')
+        results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
     except Exception as e:
@@ -210,8 +218,8 @@ def is_track_duplicate(channel_id, track_spotify_uri):
 def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist):
     duplicates_table.put_item(
         Item={
-            'host': 'ra',
-            'value': track_spotify_uri,
+            'yt_channel_id': channel_id,
+            'yt_track_id': track_spotify_uri,
             'spotify_playlist': spotify_playlist
         }
     )
@@ -228,11 +236,10 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
 
 
 def spotify_lookup(sp, record):
-    print(record)
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
     if spotify_track_info:
-        print(record['yt_track_name'], "->", spotify_track_info['artists'][0]['name'], spotify_track_info['name'], "/", spotify_track_info['uri'])
+        print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], " == ", record['yt_track_name'])
         if is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
             print("Duplicate!")
         else:
