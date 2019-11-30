@@ -20,7 +20,7 @@ cursors_table = dynamodb.Table('mirrorfm_cursors')
 
 
 def handler(event, context):
-    scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
+    scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload granted'
 
     util.prompt_for_user_token(
         username=SPOTIPY_USER,

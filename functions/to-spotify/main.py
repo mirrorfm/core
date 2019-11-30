@@ -83,7 +83,7 @@ SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_USER = os.getenv('SPOTIPY_USER')
 SPOTIPY_REDIRECT_URI = 'http://localhost/'
 
-scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
+scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload granted'
 
 
 def get_cursor(name):
@@ -239,7 +239,7 @@ def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
     if spotify_track_info:
-        print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], " == ", record['yt_track_name'])
+        print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], "==", record['yt_track_name'])
         if is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
             print("Duplicate!")
         else:

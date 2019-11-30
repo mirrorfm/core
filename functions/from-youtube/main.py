@@ -60,7 +60,7 @@ def handle(event, context):
     upload_playlist_id = None
     last_upload_datetime = None
     old_yt_count_tracks = 0
-
+    print(event)
     if 'Records' in event:
         # A channel_id was added to the `mirrorfm_channels` dynamodb table
         if event['Records'][0]['eventName'] != "INSERT":
@@ -140,8 +140,10 @@ def handle(event, context):
         try:
             upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
             channel_name = response['items'][0]['snippet']['title']
+            thumbnails = response['items'][0]['snippet']['thumbnails']
         except IndexError as e:
             # Ignore malformatted event / channel_id
+            print(e)
             return
 
         mirrorfm_channels.put_item(
@@ -150,6 +152,7 @@ def handle(event, context):
                 'channel_id': channel_id,
                 'channel_name': channel_name,
                 'upload_playlist_id': upload_playlist_id,
+                'thumbnails': thumbnails
             }
         )
 
@@ -239,4 +242,4 @@ def handle(event, context):
 
 if __name__ == "__main__":
     handle({}, {})
-    # handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCiVQcdqc3sRg12nxPjnuGbQ'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCiVQcdqc3sRg12nxPjnuGbQ'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
+    # handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCxyGFm5U3R9mK11ofYps7EA'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCxyGFm5U3R9mK11ofYps7EA'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
