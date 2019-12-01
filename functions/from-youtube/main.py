@@ -111,8 +111,6 @@ def handle(event, context):
         channel_id = channel_info['channel_id']
         if 'last_upload_datetime' in channel_info:
             last_upload_datetime = get_datetime_from_iso8601_string(channel_info['last_upload_datetime'])
-        if 'upload_playlist_id' in channel_info:
-            upload_playlist_id = channel_info['upload_playlist_id']
         if 'count_tracks' in channel_info:
             old_yt_count_tracks = channel_info['count_tracks']
 
@@ -126,35 +124,36 @@ def handle(event, context):
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
     youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
 
-    if not upload_playlist_id:
-        # Get "Uploads" playlist_id of the channel
-        try:
-            response = youtube.channels().list(
-                part="contentDetails,snippet",
-                id=channel_id
-            ).execute()
-        except Exception as e:
-            print(e)
-            return
+    try:
+        response = youtube.channels().list(
+            part="contentDetails,snippet",
+            id=channel_id
+        ).execute()
+    except Exception as e:
+        print(e)
+        return
 
-        try:
-            upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-            channel_name = response['items'][0]['snippet']['title']
-            thumbnails = response['items'][0]['snippet']['thumbnails']
-        except IndexError as e:
-            # Ignore malformatted event / channel_id
-            print(e)
-            return
+    try:
+        upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+        channel_name = response['items'][0]['snippet']['title']
+        thumbnails = response['items'][0]['snippet']['thumbnails']
+    except IndexError as e:
+        # Ignore malformatted event / channel_id
+        print(e)
+        return
 
-        mirrorfm_channels.put_item(
-            Item={
-                'host': 'yt',
-                'channel_id': channel_id,
-                'channel_name': channel_name,
-                'upload_playlist_id': upload_playlist_id,
-                'thumbnails': thumbnails
-            }
-        )
+    mirrorfm_channels.update_item(
+        Key={
+            'host': 'yt',
+            'channel_id': channel_id
+        },
+        UpdateExpression="set upload_playlist_id = :upload_playlist_id, thumbnails = :thumbnails, channel_name = :channel_name",
+        ExpressionAttributeValues={
+            ':channel_name': channel_name,
+            ':upload_playlist_id': upload_playlist_id,
+            ':thumbnails': thumbnails
+        }
+    )
 
     if not last_upload_datetime:
         process_full_list = True

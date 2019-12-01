@@ -24,7 +24,8 @@ deser = TypeDeserializer()
 import json
 import decimal
 import time
-import decimal
+import base64
+import requests
 from pprint import pprint
 from datetime import datetime, timezone
 
@@ -83,7 +84,7 @@ SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_USER = os.getenv('SPOTIPY_USER')
 SPOTIPY_REDIRECT_URI = 'http://localhost/'
 
-scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload granted'
+scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload'
 
 
 def get_cursor(name):
@@ -181,6 +182,26 @@ def get_last_playlist_for_channel(channel_id):
     return [res['Items'][0]['spotify_playlist'], res['Items'][0]['num']]
 
 
+def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
+    resp = mirrorfm_channels.get_item(
+        Key={
+            'host': 'yt',
+            'channel_id': channel_id
+        },
+        AttributesToGet=[
+            'thumbnails'
+        ]
+    )
+    print(resp)
+    if 'Item' in resp:
+        image_url = resp['Item']['thumbnails']['medium']['url']
+        sp.user_playlist_upload_cover_image(SPOTIPY_USER, playlist_id, get_as_base64(image_url))
+
+
+def get_as_base64(url):
+    return base64.b64encode(requests.get(url).content).decode("utf-8")
+
+
 def create_playlist_for_channel(sp, channel_id):
     num = 1
     res = mirrorfm_channels.query(
@@ -190,15 +211,16 @@ def create_playlist_for_channel(sp, channel_id):
     )
     channel_name = res['Items'][0]['channel_name']
     res = sp.user_playlist_create(SPOTIPY_USER, channel_name, public=True)
+    plid = res['id']
 
     playlists_table.put_item(
         Item={
             'yt_channel_id': channel_id,
             'num': num,
-            'spotify_playlist': res['id']
+            'spotify_playlist': plid
         }
     )
-    return [res['id'], num]
+    return [plid, num]
 
 
 def get_playlist_for_channel(sp, channel_id):
@@ -227,6 +249,10 @@ def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     spotify_playlist, _playlist_num = get_playlist_for_channel(sp, channel_id)
+    try:
+        add_channel_cover_to_playlist(sp, channel_id, spotify_playlist)
+    except Exception as e:
+        print(e)
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],

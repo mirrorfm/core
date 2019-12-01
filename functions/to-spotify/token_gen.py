@@ -20,7 +20,7 @@ cursors_table = dynamodb.Table('mirrorfm_cursors')
 
 
 def handler(event, context):
-    scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload granted'
+    scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
 
     util.prompt_for_user_token(
         username=SPOTIPY_USER,
@@ -33,15 +33,15 @@ def handler(event, context):
         data = json.load(f)
     pprint(data)
 
-    print cursors_table.put_item(
+    print(cursors_table.put_item(
         Item={
             'name': 'token',
             'value': data
         }
-    )
+    ))
 
-    print "Stored token"
+    print("Stored token")
 
 
 if __name__ == "__main__":
-    print handler({}, {})
+    handler({}, {})
