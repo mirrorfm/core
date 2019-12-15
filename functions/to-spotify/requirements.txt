@@ -1,3 +1,2 @@
-python-dateutil==2.8.0
-trackfilter==0.1.0
-git+git://github.com/mirrorfm/spotipy
+git+git://github.com/mirrorfm/trackfilter
+git+git://github.com/mirrorfm/spotipy-thumbnails

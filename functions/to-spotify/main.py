@@ -167,6 +167,7 @@ def find_on_spotify(sp, track_name):
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
+        print("[x]", track_name, artist_and_track)
     except Exception as e:
         raise e
 
@@ -194,7 +195,7 @@ def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     )
     print(resp)
     if 'Item' in resp:
-        image_url = resp['Item']['thumbnails']['medium']['url']
+        image_url = resp['Item']['thumbnails']['high']['url']
         sp.user_playlist_upload_cover_image(SPOTIPY_USER, playlist_id, get_as_base64(image_url))
 
 
@@ -212,7 +213,6 @@ def create_playlist_for_channel(sp, channel_id):
     channel_name = res['Items'][0]['channel_name']
     res = sp.user_playlist_create(SPOTIPY_USER, channel_name, public=True)
     plid = res['id']
-
     playlists_table.put_item(
         Item={
             'yt_channel_id': channel_id,
@@ -220,6 +220,10 @@ def create_playlist_for_channel(sp, channel_id):
             'spotify_playlist': plid
         }
     )
+    try:
+        add_channel_cover_to_playlist(sp, channel_id, plid)
+    except Exception as e:
+        print(e)
     return [plid, num]
 
 
@@ -249,10 +253,6 @@ def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     spotify_playlist, _playlist_num = get_playlist_for_channel(sp, channel_id)
-    try:
-        add_channel_cover_to_playlist(sp, channel_id, spotify_playlist)
-    except Exception as e:
-        print(e)
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],
