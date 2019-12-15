@@ -290,6 +290,7 @@ def spotify_lookup(sp, record):
                     ':spotify_track_info': spotify_track_info
                 }
             )
+            return True
 
 
 def get_current_or_next_channel():
@@ -355,6 +356,7 @@ def deserialize_record(record):
 
 def handle(event, context):
     sp = get_spotify()
+    total_added = 0
 
     if 'Records' in event:
         # New tracks
@@ -362,7 +364,9 @@ def handle(event, context):
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
-                spotify_lookup(sp, deserialize_record(record))
+                res = spotify_lookup(sp, deserialize_record(record))
+                if res:
+                    total_added += 1
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
@@ -374,9 +378,26 @@ def handle(event, context):
         tracks_to_process = get_next_tracks(channel_id)
 
         for record in tracks_to_process['Items']:
-            spotify_lookup(sp, record)
+            res = spotify_lookup(sp, record)
+            if res:
+                total_added += 1
 
         save_cursors(tracks_to_process, channel_to_process)
+
+    if total_added > 0:
+        print("Found %s tracks, updating channel total", total_added)
+        pl = get_last_playlist_for_channel(channel_id)
+        total = pl["tracks"]["total"]
+        mirrorfm_channels.update_item(
+            Key={
+                'host': 'yt',
+                'channel_id': channel_id
+            },
+            UpdateExpression="set spotify_count_tracks = :spotify_count_tracks",
+            ExpressionAttributeValues={
+                ':spotify_count_tracks': total
+            }
+        )
 
 
 if __name__ == "__main__":

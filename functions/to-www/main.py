@@ -20,7 +20,6 @@ def handle(event, context):
             "channels": [],
             "total_channels": get_table_count('mirrorfm_channels'),
             "total_tracks": get_table_count('mirrorfm_yt_tracks'),
-            "broken_tracks": 0,
             "found_tracks": get_table_count('mirrorfm_yt_duplicates')
         }
     }
