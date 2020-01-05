@@ -15,3 +15,4 @@ Sync YouTube music channels with Spotify playlists
  - λ0 [`from-github`](functions/from-github/)
  - λ1 [`from-youtube`](functions/from-youtube/)
  - λ2 [`to-spotify`](functions/to-spotify/)
+ - λ3 [`to-www`](functions/to-www/)
