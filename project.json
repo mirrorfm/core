@@ -3,6 +3,6 @@
   "description": "Mirror xyz to Spotify",
   "memory": 128,
   "timeout": 5,
-  "role": "arn:aws:iam::<aws_accoun t-:role/mirror-fm_lambda_function",
+  "role": "arn:aws:iam::<aws_account>:role/mirror-fm_lambda_function",
   "environment": {}
 }

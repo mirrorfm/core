@@ -264,33 +264,30 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
 def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
-    if spotify_track_info:
+    if spotify_track_info and not is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
         print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], "==", record['yt_track_name'])
-        if is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
-            print("Duplicate!")
-        else:
-            # Safety duplicate check needed because
-            # some duplicates were found in some playlists for unknown reasons.
-            spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
-            tracks_table.update_item(
-                Key={
-                    'yt_channel_id': record['yt_channel_id'],
-                    'yt_track_composite': record['yt_track_composite']
-                },
-                UpdateExpression="set spotify_uri = :spotify_uri,\
-                    spotify_playlist = :spotify_playlist,\
-                    spotify_found_time = :spotify_found_time,\
-                    yt_track_name = :yt_track_name,\
-                    spotify_track_info = :spotify_track_info",
-                ExpressionAttributeValues={
-                    ':spotify_uri': spotify_track_info['uri'],
-                    ':spotify_playlist': spotify_playlist,
-                    ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
-                    ':yt_track_name': record['yt_track_name'],
-                    ':spotify_track_info': spotify_track_info
-                }
-            )
-            return True
+        # Safety duplicate check needed because
+        # some duplicates were found in some playlists for unknown reasons.
+        spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
+        tracks_table.update_item(
+            Key={
+                'yt_channel_id': record['yt_channel_id'],
+                'yt_track_composite': record['yt_track_composite']
+            },
+            UpdateExpression="set spotify_uri = :spotify_uri,\
+                spotify_playlist = :spotify_playlist,\
+                spotify_found_time = :spotify_found_time,\
+                yt_track_name = :yt_track_name,\
+                spotify_track_info = :spotify_track_info",
+            ExpressionAttributeValues={
+                ':spotify_uri': spotify_track_info['uri'],
+                ':spotify_playlist': spotify_playlist,
+                ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
+                ':yt_track_name': record['yt_track_name'],
+                ':spotify_track_info': spotify_track_info
+            }
+        )
+        return True
 
 
 def get_current_or_next_channel():
@@ -385,17 +382,18 @@ def handle(event, context):
         save_cursors(tracks_to_process, channel_to_process)
 
     if total_added > 0:
-        print("Found %s tracks, updating channel total", total_added)
-        pl = get_last_playlist_for_channel(channel_id)
-        total = pl["tracks"]["total"]
-        mirrorfm_channels.update_item(
+        print("Found %s tracks, updating channel total" % total_added)
+        pl_id = get_last_playlist_for_channel(channel_id)[0]
+        pl = sp.user_playlist(SPOTIPY_USER, pl_id)
+        playlists_table.update_item(
             Key={
-                'host': 'yt',
-                'channel_id': channel_id
+                'yt_channel_id': channel_id,
+                'num': 1
             },
-            UpdateExpression="set spotify_count_tracks = :spotify_count_tracks",
+            UpdateExpression="set count_tracks = :count_tracks, count_followers = :count_followers",
             ExpressionAttributeValues={
-                ':spotify_count_tracks': total
+                ':count_tracks': pl["tracks"]["total"],
+                ':count_followers': pl["followers"]["total"]
             }
         )
 
