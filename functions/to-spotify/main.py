@@ -167,7 +167,7 @@ def find_on_spotify(sp, track_name):
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
-        print("[x]", track_name, artist_and_track)
+        # print("[x]", track_name, artist_and_track)
     except Exception as e:
         raise e
 
@@ -364,6 +364,7 @@ def handle(event, context):
                 res = spotify_lookup(sp, deserialize_record(record))
                 if res:
                     total_added += 1
+                    channel_id = record['NewImage']['yt_channel_id']['S']
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
@@ -383,6 +384,7 @@ def handle(event, context):
 
     if total_added > 0:
         print("Found %s tracks, updating channel total" % total_added)
+        print(channel_id)
         pl_id = get_last_playlist_for_channel(channel_id)[0]
         pl = sp.user_playlist(SPOTIPY_USER, pl_id)
         playlists_table.update_item(
