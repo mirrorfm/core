@@ -26,6 +26,7 @@ import decimal
 import time
 import base64
 import requests
+import operator
 from pprint import pprint
 from datetime import datetime, timezone
 
@@ -260,10 +261,38 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist)
     return spotify_playlist
 
+genres = []
+
+def count_frequency(my_list): 
+    freq = {} 
+    for item in my_list: 
+        if (item in freq): 
+            freq[item] += 1
+        else: 
+            freq[item] = 1
+    print("======")
+
+    freq = sorted(freq.items(), key=operator.itemgetter(1))
+    for f in freq: 
+        print(f)
+
+
+def find_genre(sp, info):
+    global genres
+    album = sp.album(info['album']['id'])
+    genres = genres + album['genres']
+
+    for artist in info['artists']:
+        info = sp.artist(artist['id'])
+        genres = genres + info['genres']
+    count_frequency(genres)
+
 
 def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
+    if spotify_track_info:
+        find_genre(sp, spotify_track_info)
     if spotify_track_info and not is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
         print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], "==", record['yt_track_name'])
         # Safety duplicate check needed because
