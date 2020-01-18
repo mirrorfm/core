@@ -418,9 +418,8 @@ def handle(event, context):
                 res = spotify_lookup(sp, record)
                 if res:
                     total_added += 1
-            else:
-            # elif 'genres' not in record:
-            # temporary "else", uncomment when at least one loop is done 
+            elif 'genres' not in record:
+            # temporary "else", remove completely when at least one loop is done
                 spotify_track_info = sp.track(record['spotify_uri'])
                 genres = find_genres(sp, spotify_track_info)
                 tracks_table.update_item(
