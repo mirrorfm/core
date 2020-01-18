@@ -36,7 +36,7 @@ import spotipy.oauth2 as oauth2
 
 from trackfilter.cli import split_artist_track
 
-
+new_tracks_genres = []
 # custom exceptions
 class SpotifyAPILimitReached(Exception):
     pass
@@ -181,7 +181,7 @@ def get_last_playlist_for_channel(channel_id):
     )
     if res['Count'] == 0:
         return
-    return [res['Items'][0]['spotify_playlist'], res['Items'][0]['num']]
+    return res['Items'][0]
 
 
 def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
@@ -214,18 +214,19 @@ def create_playlist_for_channel(sp, channel_id):
     channel_name = res['Items'][0]['channel_name']
     res = sp.user_playlist_create(SPOTIPY_USER, channel_name, public=True)
     plid = res['id']
+    item = {
+        'yt_channel_id': channel_id,
+        'num': num,
+        'spotify_playlist': plid
+    }
     playlists_table.put_item(
-        Item={
-            'yt_channel_id': channel_id,
-            'num': num,
-            'spotify_playlist': plid
-        }
+        Item=item
     )
     try:
         add_channel_cover_to_playlist(sp, channel_id, plid)
     except Exception as e:
         print(e)
-    return [plid, num]
+    return item
 
 
 def get_playlist_for_channel(sp, channel_id):
@@ -253,7 +254,7 @@ def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist
 
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
-    spotify_playlist, _playlist_num = get_playlist_for_channel(sp, channel_id)
+    spotify_playlist = get_playlist_for_channel(sp, channel_id)['spotify_playlist']
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],
@@ -261,42 +262,44 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
     add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist)
     return spotify_playlist
 
-genres = []
-
-def count_frequency(my_list): 
+def count_frequency(items):
     freq = {} 
-    for item in my_list: 
-        if (item in freq): 
+    for item in items:
+        if item in freq:
             freq[item] += 1
         else: 
             freq[item] = 1
-    print("======")
-
-    freq = sorted(freq.items(), key=operator.itemgetter(1))
-    for f in freq: 
-        print(f)
+    return freq
 
 
-def find_genre(sp, info):
-    global genres
+def find_genres(sp, info):
+    global new_tracks_genres
     album = sp.album(info['album']['id'])
-    genres = genres + album['genres']
+    song_genres = album['genres']
 
     for artist in info['artists']:
         info = sp.artist(artist['id'])
-        genres = genres + info['genres']
-    count_frequency(genres)
+        song_genres = song_genres + info['genres']
+
+    new_tracks_genres = new_tracks_genres + song_genres
+    return song_genres
+
+
+def merge_genres(old_tracks_genres, new_tracks_genres):
+    from collections import Counter
+    A = Counter(old_tracks_genres)
+    B = Counter(new_tracks_genres)
+    return dict(A + B)
 
 
 def spotify_lookup(sp, record):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
-    if spotify_track_info:
-        find_genre(sp, spotify_track_info)
+    # Safety duplicate check needed because
+    # some duplicates were found in some playlists for unknown reasons.
     if spotify_track_info and not is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
         print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], "==", record['yt_track_name'])
-        # Safety duplicate check needed because
-        # some duplicates were found in some playlists for unknown reasons.
+        genres = find_genres(sp, spotify_track_info)
         spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
         tracks_table.update_item(
             Key={
@@ -307,10 +310,12 @@ def spotify_lookup(sp, record):
                 spotify_playlist = :spotify_playlist,\
                 spotify_found_time = :spotify_found_time,\
                 yt_track_name = :yt_track_name,\
-                spotify_track_info = :spotify_track_info",
+                spotify_track_info = :spotify_track_info,\
+                genres = :genres",
             ExpressionAttributeValues={
                 ':spotify_uri': spotify_track_info['uri'],
                 ':spotify_playlist': spotify_playlist,
+                ':genres': genres,
                 ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
                 ':yt_track_name': record['yt_track_name'],
                 ':spotify_track_info': spotify_track_info
@@ -362,14 +367,16 @@ def get_next_tracks(channel_id):
         print("Starting from track", exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            FilterExpression="attribute_not_exists(spotify_found_time)",
+            # temporary comment, uncomment when at least one loop is done 
+            # FilterExpression="attribute_not_exists(spotify_found_time)",
             ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
     else:
         print("Starting from first track")
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            FilterExpression="attribute_not_exists(spotify_found_time)",
+            # temporary comment, uncomment when at least one loop is done 
+            # FilterExpression="attribute_not_exists(spotify_found_time)",
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
 
 
@@ -381,6 +388,8 @@ def deserialize_record(record):
 
 
 def handle(event, context):
+    global new_tracks_genres
+
     sp = get_spotify()
     total_added = 0
 
@@ -405,28 +414,53 @@ def handle(event, context):
         tracks_to_process = get_next_tracks(channel_id)
 
         for record in tracks_to_process['Items']:
-            res = spotify_lookup(sp, record)
-            if res:
-                total_added += 1
-
+            if 'spotify_uri' not in record:
+                res = spotify_lookup(sp, record)
+                if res:
+                    total_added += 1
+            else:
+            # elif 'genres' not in record:
+            # temporary "else", uncomment when at least one loop is done 
+                spotify_track_info = sp.track(record['spotify_uri'])
+                genres = find_genres(sp, spotify_track_info)
+                tracks_table.update_item(
+                    Key={
+                        'yt_channel_id': record['yt_channel_id'],
+                        'yt_track_composite': record['yt_track_composite']
+                    },
+                    UpdateExpression="set genres = :genres",
+                    ExpressionAttributeValues={
+                        ':genres': genres
+                    }
+                )
         save_cursors(tracks_to_process, channel_to_process)
 
-    if total_added > 0:
-        print("Found %s tracks, updating channel total" % total_added)
-        print(channel_id)
-        pl_id = get_last_playlist_for_channel(channel_id)[0]
-        pl = sp.user_playlist(SPOTIPY_USER, pl_id)
-        playlists_table.update_item(
-            Key={
-                'yt_channel_id': channel_id,
-                'num': 1
-            },
-            UpdateExpression="set count_tracks = :count_tracks, count_followers = :count_followers",
-            ExpressionAttributeValues={
-                ':count_tracks': pl["tracks"]["total"],
-                ':count_followers': pl["followers"]["total"]
-            }
-        )
+    print("Found %s track(s), updating channel" % total_added)
+    print(channel_id)
+    pl_item = get_last_playlist_for_channel(channel_id)
+
+    if 'genres' in pl_item:
+        old_tracks_genres = pl_item['genres']
+        playlist_genres = merge_genres(old_tracks_genres, count_frequency(new_tracks_genres))
+    else:
+        playlist_genres = count_frequency(new_tracks_genres)
+    pprint(playlist_genres)
+
+    pl_id = pl_item['spotify_playlist']
+    pl = sp.user_playlist(SPOTIPY_USER, pl_id)
+    playlists_table.update_item(
+        Key={
+            'yt_channel_id': channel_id,
+            'num': pl_item['num']
+        },
+        UpdateExpression="set count_tracks = :count_tracks, count_followers = :count_followers, genres = :genres, last_search_time = :last_search_time",
+        ExpressionAttributeValues={
+            ':genres': playlist_genres,
+            ':count_tracks': pl["tracks"]["total"],
+            ':count_followers': pl["followers"]["total"],
+            ':last_search_time': int(time.time())
+        }
+    )
 
 
 if __name__ == "__main__":

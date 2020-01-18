@@ -33,6 +33,8 @@ def handle(event, context):
         c['found_tracks'] = pl.get('count_tracks')
         c['count_followers'] = pl.get('count_followers')
         c['spotify_playlist_id'] = pl.get('spotify_playlist')
+        c['last_search_time'] = pl.get('last_search_time')
+        c['genres'] = pl.get('genres')
     arr["youtube"]["channels"] = channels
     return arr
 
