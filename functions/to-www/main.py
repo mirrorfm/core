@@ -27,7 +27,8 @@ def handle(event, context):
     }
     playlists = mirrorfm_yt_playlists.scan()
     playlists_map = {pl['yt_channel_id']: pl for pl in playlists['Items']}
-    channels = mirrorfm_channels.query(KeyConditionExpression=Key('host').eq('yt'))["Items"]
+    channels = mirrorfm_channels.query(
+        KeyConditionExpression=Key('host').eq('yt'))["Items"]
     for c in channels:
         pl = playlists_map[c['channel_id']]
         c['found_tracks'] = pl.get('count_tracks')
@@ -35,6 +36,7 @@ def handle(event, context):
         c['spotify_playlist_id'] = pl.get('spotify_playlist')
         c['last_search_time'] = pl.get('last_search_time')
         c['genres'] = pl.get('genres')
+
     arr["youtube"]["channels"] = channels
     return arr
 

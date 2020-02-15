@@ -10,41 +10,42 @@ file_path = os.path.dirname(__file__)
 module_path = os.path.join(file_path, "env")
 sys.path.append(module_path)
 
+from trackfilter.cli import split_artist_track
+import spotipy.oauth2 as oauth2
+import spotipy.util as util
+import spotipy
+from datetime import datetime, timezone
+from pprint import pprint
+import operator
+import requests
+import base64
+import time
+import decimal
+import json
+from boto3.dynamodb.types import TypeDeserializer
+from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key, Attr
+import boto3
+
 # # https://stackoverflow.com/a/39293287/1515819
 # reload(sys)
 # sys.setdefaultencoding('utf8')
 
-import boto3
-from boto3.dynamodb.conditions import Key, Attr
-from botocore.exceptions import ClientError
-from boto3.dynamodb.types import TypeDeserializer
 
 deser = TypeDeserializer()
 
-import json
-import decimal
-import time
-import base64
-import requests
-import operator
-from pprint import pprint
-from datetime import datetime, timezone
-
-import spotipy
-import spotipy.util as util
-import spotipy.oauth2 as oauth2
-
-from trackfilter.cli import split_artist_track
 
 new_tracks_genres = []
 # custom exceptions
+
+
 class SpotifyAPILimitReached(Exception):
     pass
 
 
 # Helper class to convert a DynamoDB item to JSON.
 class DecimalEncoder(json.JSONEncoder):
-    def default(self, o): # pylint: disable=E0202
+    def default(self, o):  # pylint: disable=E0202
         if isinstance(o, decimal.Decimal):
             if o % 1 > 0:
                 return float(o)
@@ -121,7 +122,7 @@ def restore_spotify_token():
         return 0
 
     token = res['Item']['value']
-    with open("/tmp/.cache-"+SPOTIPY_USER, "w+") as f:
+    with open("/tmp/.cache-" + SPOTIPY_USER, "w+") as f:
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
                                   cls=DecimalEncoder))
@@ -142,12 +143,12 @@ def get_spotify():
     restore_spotify_token()
 
     sp_oauth = oauth2.SpotifyOAuth(
-            SPOTIPY_CLIENT_ID,
-            SPOTIPY_CLIENT_SECRET,
-            SPOTIPY_REDIRECT_URI,
-            scope=scope,
-            cache_path='/tmp/.cache-'+SPOTIPY_USER
-        )
+        SPOTIPY_CLIENT_ID,
+        SPOTIPY_CLIENT_SECRET,
+        SPOTIPY_REDIRECT_URI,
+        scope=scope,
+        cache_path='/tmp/.cache-' + SPOTIPY_USER
+    )
 
     token_info = sp_oauth.get_cached_token()
     if not token_info:
@@ -197,7 +198,8 @@ def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     print(resp)
     if 'Item' in resp:
         image_url = resp['Item']['thumbnails']['high']['url']
-        sp.user_playlist_upload_cover_image(SPOTIPY_USER, playlist_id, get_as_base64(image_url))
+        sp.user_playlist_upload_cover_image(
+            SPOTIPY_USER, playlist_id, get_as_base64(image_url))
 
 
 def get_as_base64(url):
@@ -208,7 +210,8 @@ def create_playlist_for_channel(sp, channel_id):
     num = 1
     res = mirrorfm_channels.query(
         ScanIndexForward=False,
-        KeyConditionExpression=Key('host').eq('yt') & Key('channel_id').eq(channel_id),
+        KeyConditionExpression=Key('host').eq(
+            'yt') & Key('channel_id').eq(channel_id),
         Limit=1
     )
     channel_name = res['Items'][0]['channel_name']
@@ -231,7 +234,7 @@ def create_playlist_for_channel(sp, channel_id):
 
 def get_playlist_for_channel(sp, channel_id):
     return get_last_playlist_for_channel(channel_id) or \
-           create_playlist_for_channel(sp, channel_id)
+        create_playlist_for_channel(sp, channel_id)
 
 
 def is_track_duplicate(channel_id, track_spotify_uri):
@@ -243,7 +246,8 @@ def is_track_duplicate(channel_id, track_spotify_uri):
     )
 
 
-def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist):
+def add_track_to_duplicate_index(
+        channel_id, track_spotify_uri, spotify_playlist):
     duplicates_table.put_item(
         Item={
             'yt_channel_id': channel_id,
@@ -254,20 +258,25 @@ def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist
 
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
-    spotify_playlist = get_playlist_for_channel(sp, channel_id)['spotify_playlist']
+    spotify_playlist = get_playlist_for_channel(sp, channel_id)[
+        'spotify_playlist']
     sp.user_playlist_add_tracks(SPOTIPY_USER,
                                 spotify_playlist,
                                 [track_spotify_uri],
                                 position=0)
-    add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist)
+    add_track_to_duplicate_index(
+        channel_id,
+        track_spotify_uri,
+        spotify_playlist)
     return spotify_playlist
 
+
 def count_frequency(items):
-    freq = {} 
+    freq = {}
     for item in items:
         if item in freq:
             freq[item] += 1
-        else: 
+        else:
             freq[item] = 1
     return freq
 
@@ -297,10 +306,19 @@ def spotify_lookup(sp, record):
 
     # Safety duplicate check needed because
     # some duplicates were found in some playlists for unknown reasons.
-    if spotify_track_info and not is_track_duplicate(record['yt_channel_id'], spotify_track_info['uri']):
-        print("[√]", spotify_track_info['uri'], spotify_track_info['artists'][0]['name'], "-", spotify_track_info['name'], "==", record['yt_track_name'])
+    if spotify_track_info and not is_track_duplicate(
+            record['yt_channel_id'], spotify_track_info['uri']):
+        print(
+            "[√]",
+            spotify_track_info['uri'],
+            spotify_track_info['artists'][0]['name'],
+            "-",
+            spotify_track_info['name'],
+            "==",
+            record['yt_track_name'])
         genres = find_genres(sp, spotify_track_info)
-        spotify_playlist = add_track_to_spotify_playlist(sp, spotify_track_info['uri'], record['yt_channel_id'])
+        spotify_playlist = add_track_to_spotify_playlist(
+            sp, spotify_track_info['uri'], record['yt_channel_id'])
         tracks_table.update_item(
             Key={
                 'yt_channel_id': record['yt_channel_id'],
@@ -325,8 +343,10 @@ def spotify_lookup(sp, record):
 
 
 def get_current_or_next_channel():
-    exclusive_start_yt_channel_track_key = get_cursor('exclusive_start_yt_channel_track_key')
-    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
+    exclusive_start_yt_channel_track_key = get_cursor(
+        'exclusive_start_yt_channel_track_key')
+    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {
+    }:
         channel_to_process = mirrorfm_channels.query(
             Limit=1,
             ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
@@ -350,7 +370,8 @@ def get_current_or_next_channel():
 
 def save_cursors(just_processed_tracks, just_processed_channel):
     if 'LastEvaluatedKey' in just_processed_tracks:
-        set_cursor('exclusive_start_yt_track_key', just_processed_tracks['LastEvaluatedKey'])
+        set_cursor('exclusive_start_yt_track_key',
+                   just_processed_tracks['LastEvaluatedKey'])
     else:
         cursors_table.delete_item(
             Key={
@@ -358,16 +379,20 @@ def save_cursors(just_processed_tracks, just_processed_channel):
             }
         )
         if 'LastEvaluatedKey' in just_processed_channel:
-            set_cursor('exclusive_start_yt_channel_track_key', just_processed_channel['LastEvaluatedKey'])
+            set_cursor(
+                'exclusive_start_yt_channel_track_key',
+                just_processed_channel['LastEvaluatedKey'])
 
 
 def get_next_tracks(channel_id):
     exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
     if 'Item' in exclusive_start_yt_track_key:
-        print("Starting from track", exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
+        print(
+            "Starting from track",
+            exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            # temporary comment, uncomment when at least one loop is done 
+            # temporary comment, uncomment when at least one loop is done
             # FilterExpression="attribute_not_exists(spotify_found_time)",
             ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
@@ -375,7 +400,7 @@ def get_next_tracks(channel_id):
         print("Starting from first track")
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            # temporary comment, uncomment when at least one loop is done 
+            # temporary comment, uncomment when at least one loop is done
             # FilterExpression="attribute_not_exists(spotify_found_time)",
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
 
@@ -395,7 +420,8 @@ def handle(event, context):
 
     if 'Records' in event:
         # New tracks
-        print("Process %d tracks just added to DynamoDB" % len(event['Records']))
+        print("Process %d tracks just added to DynamoDB" %
+              len(event['Records']))
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
@@ -419,7 +445,8 @@ def handle(event, context):
                 if res:
                     total_added += 1
             elif 'genres' not in record:
-            # temporary "else", remove completely when at least one loop is done
+                # temporary "else", remove completely when at least one loop is
+                # done
                 spotify_track_info = sp.track(record['spotify_uri'])
                 genres = find_genres(sp, spotify_track_info)
                 tracks_table.update_item(
@@ -440,7 +467,9 @@ def handle(event, context):
 
     if 'genres' in pl_item:
         old_tracks_genres = pl_item['genres']
-        playlist_genres = merge_genres(old_tracks_genres, count_frequency(new_tracks_genres))
+        playlist_genres = merge_genres(
+            old_tracks_genres,
+            count_frequency(new_tracks_genres))
     else:
         playlist_genres = count_frequency(new_tracks_genres)
     pprint(playlist_genres)
@@ -463,7 +492,7 @@ def handle(event, context):
 
 
 if __name__ == "__main__":
-    ### Quick tests
+    # Quick tests
 
     # Do nothing
     handle({}, {})
