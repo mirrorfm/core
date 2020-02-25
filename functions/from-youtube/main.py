@@ -219,14 +219,19 @@ def handle(event, context):
 
     i = 0
     for items in chunks(new_items_desc, 25):
-        dynamodb.batch_write_item(RequestItems={
-            'mirrorfm_yt_tracks': [{ 'PutRequest': { 'Item': {
+        batch = []
+        for item in items:
+            id = get_video_id(process_full_list, item['contentDetails'])
+            put_request = { 'PutRequest': { 'Item': {
                 'yt_channel_id': channel_id,
-                'yt_track_composite': '-'.join([item['snippet']['publishedAt'], item['id']]),
-                'yt_track_id': get_video_id(process_full_list, item['contentDetails']),
+                'yt_track_composite': '-'.join([item['snippet']['publishedAt'], id]),
+                'yt_track_id': id,
                 'yt_track_name': str(item['snippet']['title']),
                 'yt_published_at': item['snippet']['publishedAt']
-            }}} for item in items]
+            }}}
+            batch.append(put_request)
+        dynamodb.batch_write_item(RequestItems={
+           'mirrorfm_yt_tracks': batch
         })
         i += 1
         print("Batch sent %d/%d" % (i * 25, int(len(new_items_desc) / 25 + 1) * 25))
