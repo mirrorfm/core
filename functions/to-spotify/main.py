@@ -35,10 +35,7 @@ import boto3
 deser = TypeDeserializer()
 
 
-new_tracks_genres = []
 # custom exceptions
-
-
 class SpotifyAPILimitReached(Exception):
     pass
 
@@ -69,7 +66,7 @@ class Memoize:
 PLAYLIST_EXPECTED_MAX_LENGTH = 11000
 WEBSITE = "https://mirror.fm"
 HOST = "yt"
-BATCH_GET_SIZE = 500
+BATCH_GET_SIZE = 1000
 
 # DB
 client = boto3.client("dynamodb", region_name='eu-west-1')
@@ -79,6 +76,7 @@ playlists_table = dynamodb.Table('mirrorfm_yt_playlists')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
 tracks_table = dynamodb.Table('mirrorfm_yt_tracks')
 duplicates_table = dynamodb.Table('mirrorfm_yt_duplicates')
+events_table = dynamodb.Table('mirrorfm_events')
 
 # Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
@@ -282,7 +280,7 @@ def count_frequency(items):
 
 
 def find_genres(sp, info):
-    global new_tracks_genres
+    global NEW_TRACKS_GENRES
     album = sp.album(info['album']['id'])
     song_genres = album['genres']
 
@@ -290,7 +288,7 @@ def find_genres(sp, info):
         info = sp.artist(artist['id'])
         song_genres = song_genres + info['genres']
 
-    new_tracks_genres = new_tracks_genres + song_genres
+    NEW_TRACKS_GENRES += song_genres
     return song_genres
 
 
@@ -314,7 +312,8 @@ def spotify_lookup(sp, record):
             spotify_track_info['artists'][0]['name'],
             "-",
             spotify_track_info['name'],
-            "==",
+            "\n",
+            "\t\t\t\t\t",
             record['yt_track_name'])
         genres = find_genres(sp, spotify_track_info)
         spotify_playlist = add_track_to_spotify_playlist(
@@ -392,16 +391,14 @@ def get_next_tracks(channel_id):
             exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            # temporary comment, uncomment when at least one loop is done
-            # FilterExpression="attribute_not_exists(spotify_found_time)",
+            FilterExpression="attribute_not_exists(spotify_found_time)",
             ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
     else:
         print("Starting from first track")
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
-            # temporary comment, uncomment when at least one loop is done
-            # FilterExpression="attribute_not_exists(spotify_found_time)",
+            FilterExpression="attribute_not_exists(spotify_found_time)",
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
 
 
@@ -413,10 +410,11 @@ def deserialize_record(record):
 
 
 def handle(event, context):
-    global new_tracks_genres
+    global NEW_TRACKS_GENRES
+    NEW_TRACKS_GENRES = []
 
     sp = get_spotify()
-    total_added = 0
+    total_added = total_searched = 0
 
     if 'Records' in event:
         # New tracks
@@ -425,10 +423,10 @@ def handle(event, context):
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
-                res = spotify_lookup(sp, deserialize_record(record))
-                if res:
+                total_searched += 1
+                if spotify_lookup(sp, deserialize_record(record)):
                     total_added += 1
-                    channel_id = record['NewImage']['yt_channel_id']['S']
+                channel_id = record['NewImage']['yt_channel_id']['S']
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
@@ -441,54 +439,59 @@ def handle(event, context):
 
         for record in tracks_to_process['Items']:
             if 'spotify_uri' not in record:
-                res = spotify_lookup(sp, record)
-                if res:
+                total_searched += 1
+                if spotify_lookup(sp, record):
                     total_added += 1
-            elif 'genres' not in record:
-                # temporary "else", remove completely when at least one loop is
-                # done
-                spotify_track_info = sp.track(record['spotify_uri'])
-                genres = find_genres(sp, spotify_track_info)
-                tracks_table.update_item(
-                    Key={
-                        'yt_channel_id': record['yt_channel_id'],
-                        'yt_track_composite': record['yt_track_composite']
-                    },
-                    UpdateExpression="set genres = :genres",
-                    ExpressionAttributeValues={
-                        ':genres': genres
-                    }
-                )
         save_cursors(tracks_to_process, channel_to_process)
 
-    print("Found %s track(s), updating channel" % total_added)
-    print(channel_id)
-    pl_item = get_last_playlist_for_channel(channel_id)
+    if total_searched > 0:
+        print(
+            "Searched %s, found %s track(s), updating channel info for %s" %
+            (total_searched, total_added, channel_id))
+        pl_item = get_last_playlist_for_channel(channel_id)
+        if not pl_item:
+            return
 
-    if 'genres' in pl_item:
-        old_tracks_genres = pl_item['genres']
-        playlist_genres = merge_genres(
-            old_tracks_genres,
-            count_frequency(new_tracks_genres))
-    else:
-        playlist_genres = count_frequency(new_tracks_genres)
-    pprint(playlist_genres)
+        pl_id = pl_item['spotify_playlist']
+        pl = sp.playlist(pl_id)
 
-    pl_id = pl_item['spotify_playlist']
-    pl = sp.user_playlist(SPOTIPY_USER, pl_id)
-    playlists_table.update_item(
-        Key={
-            'yt_channel_id': channel_id,
-            'num': pl_item['num']
-        },
-        UpdateExpression="set count_tracks = :count_tracks, count_followers = :count_followers, genres = :genres, last_search_time = :last_search_time",
-        ExpressionAttributeValues={
-            ':genres': playlist_genres,
-            ':count_tracks': pl["tracks"]["total"],
-            ':count_followers': pl["followers"]["total"],
-            ':last_search_time': int(time.time())
+        update_expr = "set count_followers = :count_followers, last_search_time = :last_search_time"
+        expr_attrs = {
+             ':count_followers': pl["followers"]["total"],
+             ':last_search_time': int(time.time())
         }
-    )
+        if total_added > 0:
+            if 'genres' in pl_item:
+                old_tracks_genres = pl_item['genres']
+                playlist_genres = merge_genres(
+                    old_tracks_genres,
+                    count_frequency(NEW_TRACKS_GENRES))
+            else:
+                playlist_genres = count_frequency(NEW_TRACKS_GENRES)
+            pprint(count_frequency(NEW_TRACKS_GENRES))
+            update_expr += ", genres = :genres, last_found_time = :last_found_time, count_tracks = :count_tracks"
+            expr_attrs[':last_found_time'] = int(time.time())
+            expr_attrs[':genres'] = playlist_genres
+            expr_attrs[':count_tracks'] = pl["tracks"]["total"]
+
+            events_table.put_item(
+                Item={
+                    'host': 'yt',
+                    'timestamp': int(time.time()),
+                    'added': int(total_added),
+                    'genres': count_frequency(NEW_TRACKS_GENRES),
+                    'channel_id': channel_id,
+                    'spotify_playlist': pl_id
+                }
+            )
+        playlists_table.update_item(
+            Key={
+                'yt_channel_id': channel_id,
+                'num': pl_item['num']
+            },
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_attrs
+        )
 
 
 if __name__ == "__main__":

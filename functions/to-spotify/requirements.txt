@@ -1,2 +1,2 @@
 git+git://github.com/mirrorfm/trackfilter
-git+git://github.com/mirrorfm/spotipy-thumbnails
+spotipy==2.9.0
