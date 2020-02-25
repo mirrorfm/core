@@ -46,10 +46,19 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
-def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime):
+def get_video_id(playlist_item, item_content):
+    if playlist_item:
+        # playlist_item
+        return item_content['videoId']
+    else:
+        # activity item
+        return item_content['upload']['videoId']
+
+
+def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list):
     item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt'])
     if item_datetime > last_upload_datetime:
-        print(item['id'] + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
+        print(get_video_id(process_full_list, item['contentDetails']) + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
         new_items_desc.append(item)
         if item_datetime > next_last_upload_datetime:
             return item_datetime
@@ -141,6 +150,7 @@ def handle(event, context):
         # Ignore malformatted event / channel_id
         print(e)
         return
+    print(channel_name)
 
     mirrorfm_channels.update_item(
         Key={
@@ -169,7 +179,7 @@ def handle(event, context):
         while True:
             try:
                 response = youtube.playlistItems().list(
-                    part="snippet",
+                    part="snippet,contentDetails",
                     playlistId=upload_playlist_id,
                     maxResults=50,
                     pageToken=pageToken
@@ -178,7 +188,7 @@ def handle(event, context):
                 print(e)
                 return
             for item in response['items']:
-                next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime)
+                next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
             if 'nextPageToken' in response:
                 pageToken = response['nextPageToken']
             else:
@@ -190,7 +200,7 @@ def handle(event, context):
         while True:
             try:
                 response = youtube.activities().list(
-                    part="snippet",
+                    part="snippet,contentDetails",
                     channelId=channel_id,
                     maxResults=50,
                     pageToken=pageToken,
@@ -201,7 +211,7 @@ def handle(event, context):
                 return
             for item in response['items']:
                 if item['snippet']['type'] == 'upload':
-                    next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime)
+                    next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
             if 'nextPageToken' in response:
                 pageToken = response['nextPageToken']
             else:
@@ -213,7 +223,7 @@ def handle(event, context):
             'mirrorfm_yt_tracks': [{ 'PutRequest': { 'Item': {
                 'yt_channel_id': channel_id,
                 'yt_track_composite': '-'.join([item['snippet']['publishedAt'], item['id']]),
-                'yt_track_id': item['id'],
+                'yt_track_id': get_video_id(process_full_list, item['contentDetails']),
                 'yt_track_name': str(item['snippet']['title']),
                 'yt_published_at': item['snippet']['publishedAt']
             }}} for item in items]
@@ -239,6 +249,10 @@ def handle(event, context):
         print("No new tracks")
 
 
+# Quick local tests
 if __name__ == "__main__":
+    # Check next item (CRON mode)
     handle({}, {})
-    # handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCxyGFm5U3R9mK11ofYps7EA'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCxyGFm5U3R9mK11ofYps7EA'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
+
+    # Add new channel
+#     handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCSMUq7nmVCRpM3ZXAOhBCMw'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCSMUq7nmVCRpM3ZXAOhBCMw'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
