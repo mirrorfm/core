@@ -259,5 +259,5 @@ if __name__ == "__main__":
     # Check next item (CRON mode)
     handle({}, {})
 
-    # Add new channel
-#     handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCSMUq7nmVCRpM3ZXAOhBCMw'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCSMUq7nmVCRpM3ZXAOhBCMw'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
+#     Add new channel
+#     handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCPvkTCeGc0U7KUL5QVcKF-w'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCPvkTCeGc0U7KUL5QVcKF-w'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})

@@ -14,11 +14,10 @@ If you are looking to add your own channels, see https://github.com/mirrorfm/dat
  - Constantly check for new YouTube uploads,
  - Find previously unreleased YouTube songs that were released on Spotify today.
 
-## How it works
+## Lambdas
 
-2 CRON jobs running on AWS Lambda:
-
- - λ0 [`from-github`](functions/from-github/)
- - λ1 [`from-youtube`](functions/from-youtube/)
- - λ2 [`to-spotify`](functions/to-spotify/)
- - λ3 [`to-www`](functions/to-www/)
+ - [`from-github`](functions/from-github/)
+ - [`from-youtube`](functions/from-youtube/)
+ - [`to-spotify`](functions/to-spotify/)
+ - [`to-www-channels`](functions/to-www-channels/)
+ - [`to-www-events`](functions/to-www-events/)
