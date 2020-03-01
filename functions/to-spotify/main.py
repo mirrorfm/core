@@ -196,7 +196,7 @@ def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     print(resp)
     if 'Item' in resp:
         image_url = resp['Item']['thumbnails']['high']['url']
-        sp.user_playlist_upload_cover_image(
+        sp.playlist_upload_cover_image(
             SPOTIPY_USER, playlist_id, get_as_base64(image_url))
 
 
@@ -460,6 +460,7 @@ def handle(event, context):
              ':count_followers': pl["followers"]["total"],
              ':last_search_time': int(time.time())
         }
+
         if total_added > 0:
             if 'genres' in pl_item:
                 old_tracks_genres = pl_item['genres']
@@ -469,6 +470,7 @@ def handle(event, context):
             else:
                 playlist_genres = count_frequency(NEW_TRACKS_GENRES)
             pprint(count_frequency(NEW_TRACKS_GENRES))
+
             update_expr += ", genres = :genres, last_found_time = :last_found_time, count_tracks = :count_tracks"
             expr_attrs[':last_found_time'] = int(time.time())
             expr_attrs[':genres'] = playlist_genres
