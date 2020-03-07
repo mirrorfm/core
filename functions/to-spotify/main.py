@@ -195,9 +195,9 @@ def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     )
     print(resp)
     if 'Item' in resp:
-        image_url = resp['Item']['thumbnails']['high']['url']
+        image_url = resp['Item']['thumbnails']['medium']['url']
         sp.playlist_upload_cover_image(
-            SPOTIPY_USER, playlist_id, get_as_base64(image_url))
+            playlist_id, get_as_base64(image_url))
 
 
 def get_as_base64(url):
