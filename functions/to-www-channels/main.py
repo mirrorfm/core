@@ -30,6 +30,8 @@ def handle(event, context):
     channels = mirrorfm_channels.query(
         KeyConditionExpression=Key('host').eq('yt'))["Items"]
     for c in channels:
+        if 'channel_id' not in c:
+            continue
         pl = playlists_map[c['channel_id']]
         c['found_tracks'] = pl.get('count_tracks')
         c['count_followers'] = pl.get('count_followers')

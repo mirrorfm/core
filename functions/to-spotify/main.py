@@ -344,8 +344,7 @@ def spotify_lookup(sp, record):
 def get_current_or_next_channel():
     exclusive_start_yt_channel_track_key = get_cursor(
         'exclusive_start_yt_channel_track_key')
-    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {
-    }:
+    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
         channel_to_process = mirrorfm_channels.query(
             Limit=1,
             ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
