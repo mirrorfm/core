@@ -1,5 +1,8 @@
 {
     "description": "From DynamoDB to www (channels endpoint)",
     "runtime": "python3.7",
-    "timeout": 30
+    "timeout": 30,
+    "hooks":{
+        "build": "pip3 install -r requirements.txt -t ./env"
+    }
 }
