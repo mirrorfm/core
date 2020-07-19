@@ -19,7 +19,7 @@ client = boto3.client("dynamodb", region_name='eu-west-1')
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 mirrorfm_yt_playlists = dynamodb.Table('mirrorfm_yt_playlists')
 
-sp = spotipy.Spotify(auth_manager=spotipy.SpotifyOAuth(scope='playlist-modify-public playlist-modify-private'))
+sp = spotipy.Spotify(auth_manager=spotipy.SpotifyOAuth(scope='playlist-modify-public playlist-modify-private', username="xlqeojt6n7on0j7coh9go8ifd"))
 
 # Get all
 playlists = mirrorfm_yt_playlists.scan()

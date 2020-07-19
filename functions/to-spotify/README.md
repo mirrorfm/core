@@ -27,7 +27,7 @@ Fill in `./functions/to-spotify/env.json` with `SPOTIPY_CLIENT_ID` and `SPOTIPY_
 
     apex build to-spotify >/dev/null && apex deploy to-spotify --region eu-west-1 -ldebug --env-file ./functions/to-spotify/env.json
 
-### AWS prerequesites
+### AWS prerequisites
 
  - All from λ1
  - DynamoDB tables:

@@ -1,2 +1,2 @@
 git+git://github.com/mirrorfm/trackfilter
-spotipy==2.10.0
+spotipy==2.13.0

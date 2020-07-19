@@ -12,24 +12,17 @@ sys.path.append(module_path)
 
 from trackfilter.cli import split_artist_track
 import spotipy.oauth2 as oauth2
-import spotipy.util as util
 import spotipy
 from datetime import datetime, timezone
 from pprint import pprint
-import operator
 import requests
 import base64
 import time
 import decimal
 import json
 from boto3.dynamodb.types import TypeDeserializer
-from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 import boto3
-
-# # https://stackoverflow.com/a/39293287/1515819
-# reload(sys)
-# sys.setdefaultencoding('utf8')
 
 
 deser = TypeDeserializer()
@@ -180,7 +173,7 @@ def get_last_playlist_for_channel(channel_id):
     )
     if res['Count'] == 0:
         return
-    return res['Items'][0]
+    return [res['Items'][0], res['Items'][0]['num']]
 
 
 def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
@@ -204,16 +197,17 @@ def get_as_base64(url):
     return base64.b64encode(requests.get(url).content).decode("utf-8")
 
 
-def create_playlist_for_channel(sp, channel_id):
-    num = 1
+def create_playlist_for_channel(sp, channel_id, num=1):
     res = mirrorfm_channels.query(
         ScanIndexForward=False,
         KeyConditionExpression=Key('host').eq(
             'yt') & Key('channel_id').eq(channel_id),
         Limit=1
     )
-    channel_name = res['Items'][0]['channel_name']
-    res = sp.user_playlist_create(SPOTIPY_USER, channel_name, public=True)
+    playlist_name = res['Items'][0]['channel_name']
+    if num > 1:
+        playlist_name += ' (%d)' % num
+    res = sp.user_playlist_create(SPOTIPY_USER, playlist_name, public=True)
     plid = res['id']
     item = {
         'yt_channel_id': channel_id,
@@ -227,7 +221,7 @@ def create_playlist_for_channel(sp, channel_id):
         add_channel_cover_to_playlist(sp, channel_id, plid)
     except Exception as e:
         print(e)
-    return item
+    return [item, num]
 
 
 def get_playlist_for_channel(sp, channel_id):
@@ -255,13 +249,32 @@ def add_track_to_duplicate_index(
     )
 
 
+def playlist_seems_full(e, sp, spotify_playlist):
+    if not (hasattr(e, 'http_status') and e.http_status in [403, 500]):
+        return False
+    # only query Spotify total as a last resort
+    # https://github.com/spotify/web-api/issues/1179
+    playlist = sp.user_playlist(SPOTIPY_USER, spotify_playlist, "tracks")
+    total = playlist["tracks"]["total"]
+    return total == PLAYLIST_EXPECTED_MAX_LENGTH
+
+
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
-    spotify_playlist = get_playlist_for_channel(sp, channel_id)[
-        'spotify_playlist']
-    sp.user_playlist_add_tracks(SPOTIPY_USER,
-                                spotify_playlist,
-                                [track_spotify_uri],
-                                position=0)
+    try:
+        item, playlist_num = get_playlist_for_channel(sp, channel_id)
+        spotify_playlist = item['spotify_playlist']
+        sp.user_playlist_add_tracks(SPOTIPY_USER,
+                                    spotify_playlist,
+                                    [track_spotify_uri],
+                                    position=0)
+    except Exception as e:
+        if playlist_seems_full(e, sp, spotify_playlist):
+            spotify_playlist, _ = create_playlist_for_channel(sp, channel_id, playlist_num+1)
+            # retry same function to use API limit logic
+            add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id)
+        else:
+            # Reached API limit?
+            raise e
     add_track_to_duplicate_index(
         channel_id,
         track_spotify_uri,
@@ -367,19 +380,26 @@ def get_current_or_next_channel():
 
 
 def save_cursors(just_processed_tracks, just_processed_channel):
+    print('just_processed_channel', just_processed_channel)
     if 'LastEvaluatedKey' in just_processed_tracks:
+        print('LastEvaluatedKey in just_processed_tracks')
         set_cursor('exclusive_start_yt_track_key',
                    just_processed_tracks['LastEvaluatedKey'])
+        print('set cursor exclusive_start_yt_track_key with', just_processed_tracks['LastEvaluatedKey'])
     else:
+        print('no LastEvaluatedKey in just_processed_tracks')
         cursors_table.delete_item(
             Key={
                 'name': 'exclusive_start_yt_track_key'
             }
         )
+        print('deleted exclusive_start_yt_track_key')
         if 'LastEvaluatedKey' in just_processed_channel:
+            print('LastEvaluatedKey is in just_processed_channel')
             set_cursor(
                 'exclusive_start_yt_channel_track_key',
                 just_processed_channel['LastEvaluatedKey'])
+            print('set cursor exclusive_start_yt_channel_track_key with', just_processed_channel['LastEvaluatedKey'])
 
 
 def get_next_tracks(channel_id):
@@ -388,6 +408,7 @@ def get_next_tracks(channel_id):
         print(
             "Starting from track",
             exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
+        print(channel_id)
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
@@ -429,11 +450,15 @@ def handle(event, context):
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
+        channel_name = None
 
-        channel_name = channel_to_process['Items'][0]['channel_name']
-        print("Rediscovering channel", channel_name)
-
+        # Channel might not have a name yet if it has just been added
+        if 'channel_name' in channel_to_process['Items'][0]:
+            channel_name = channel_to_process['Items'][0]['channel_name']
         channel_id = channel_to_process['Items'][0]['channel_id']
+
+        print("Rediscovering channel", channel_name or channel_id)
+
         tracks_to_process = get_next_tracks(channel_id)
 
         for record in tracks_to_process['Items']:
@@ -447,7 +472,7 @@ def handle(event, context):
         print(
             "Searched %s, found %s track(s), updating channel info for %s" %
             (total_searched, total_added, channel_id))
-        pl_item = get_last_playlist_for_channel(channel_id)
+        pl_item, num = get_last_playlist_for_channel(channel_id)
         if not pl_item:
             return
 
