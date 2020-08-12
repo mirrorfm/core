@@ -142,6 +142,10 @@ def handle(event, context):
         print(e)
         return
 
+    if 'items' not in response:
+        print('YT API rate exceeded')
+        return
+
     try:
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
         channel_name = response['items'][0]['snippet']['title']
