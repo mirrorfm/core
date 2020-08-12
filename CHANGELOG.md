@@ -1,3 +1,10 @@
+# 2020-08-12
+
+## Added
+
+ - [from-github] Handle multiple additions at once
+ - [from-github] Handle duplicates
+ 
 # 2020-02-25
 
 ## Added

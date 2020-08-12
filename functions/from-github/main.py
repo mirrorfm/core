@@ -5,27 +5,52 @@ import sys
 from pprint import pprint
 import urllib.request
 import boto3
-import botocore
 from botocore.exceptions import ClientError
 
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
+mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
 
 
 def handle(event, context):
     repo = event['repository']['full_name']
     file = event['head_commit']['modified'][0]
 
-    URL = '/'.join(['https://raw.githubusercontent.com', repo, 'master', file])
-    print(URL)
+    if file != "youtube-channels.csv":
+        return
 
-    lines = urllib.request.urlopen(URL).readlines()
-    last = lines[len(lines) - 1]
+    url = '/'.join(['https://raw.githubusercontent.com', repo, 'master', file])
+    print(url)
 
-    channel_id = str(last, 'utf-8').split(',')[0]
-    print(channel_id)
+    lines = urllib.request.urlopen(url).readlines()
 
-    if file == "youtube-channels.csv":
+    last_successful_entry = mirrorfm_cursors.get_item(
+        Key={
+            'name': 'last_successful_entry'
+        },
+        AttributesToGet=[
+            'value'
+        ]
+    )
+
+    if 'Item' in last_successful_entry and last_successful_entry['Item'] != {}:
+        current = int(last_successful_entry['Item']['value']) + 1
+    else:
+        # no cursor, query first
+        current = 0
+
+    total = len(lines)
+
+    while current < len(lines):
+        print(current, "/", total)
+
+        current_line = lines[current]
+        channel_id = str(current_line, 'utf-8').split(',')[0]
+
+        if not channel_id or channel_id == "":
+            print("line", current, "is empty")
+            break
+
         try:
             mirrorfm_channels.put_item(
                 Item={
@@ -36,6 +61,15 @@ def handle(event, context):
             )
         except ClientError:
             print('Duplicate', channel_id, '(nothing to do)')
+
+        current += 1
+
+    mirrorfm_cursors.put_item(
+        Item={
+            'name': 'last_successful_entry',
+            'value': current
+        }
+    )
 
 
 if __name__ == "__main__":
