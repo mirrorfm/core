@@ -64,11 +64,15 @@ def handle(event, context):
     playlists_map = {pl['yt_channel_id']: pl for pl in playlists['Items']}
     channels = mirrorfm_channels.query(
         KeyConditionExpression=Key('host').eq('yt'))["Items"]
+
+    # channel doesn't have a name yet
+    channels = [c for c in channels if 'channel_name' in c]
+
     for c in channels:
-        if 'channel_id' not in c:
+        if c['channel_id'] not in playlists_map:
+            # channel doesn't have a playlist yet
             continue
-        pl = playlists_map[c['channel_id']]
-        populate(c, pl)
+        populate(c, playlists_map[c['channel_id']])
 
     arr["youtube"]["channels"] = channels
     return {

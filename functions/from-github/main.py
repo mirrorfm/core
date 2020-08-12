@@ -37,7 +37,7 @@ def handle(event, context):
         current = int(last_successful_entry['Item']['value']) + 1
     else:
         # no cursor, query first
-        current = 0
+        current = 1  # file has headers
 
     total = len(lines)
 

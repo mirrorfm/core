@@ -2,6 +2,7 @@
 
 ## Added
 
+ - [to-www-channels] Do not return pending channels
  - [from-github] Handle multiple additions at once
  - [from-github] Handle duplicates
  
