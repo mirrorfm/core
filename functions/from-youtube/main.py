@@ -29,7 +29,10 @@ mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
 
 scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
-YT_DEVELOPER_KEY = os.getenv('YT_DEVELOPER_KEY')
+
+def yt_developer_keys():
+    envs = os.environ
+    return [os.environ.get(env) for env in envs if env.startswith('YT_DEVELOPER_KEY')]
 
 
 def get_datetime_from_iso8601_string(s):
@@ -123,7 +126,6 @@ def handle(event, context):
         if 'count_tracks' in channel_info:
             old_yt_count_tracks = channel_info['count_tracks']
 
-
     print(last_upload_datetime)
     print(upload_playlist_id)
     print(old_yt_count_tracks)
@@ -131,20 +133,21 @@ def handle(event, context):
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-    youtube = discovery.build("youtube", "v3", developerKey=YT_DEVELOPER_KEY)
 
-    try:
-        response = youtube.channels().list(
-            part="contentDetails,snippet",
-            id=channel_id
-        ).execute()
-    except Exception as e:
-        print(e)
-        return
+    keys = yt_developer_keys()
+    for i, key in enumerate(keys):
+        print(key)
+        youtube = discovery.build("youtube", "v3", developerKey=key)
 
-    if 'items' not in response:
-        print('YT API rate exceeded')
-        return
+        try:
+            response = youtube.channels().list(
+                part="contentDetails,snippet",
+                id=channel_id
+            ).execute()
+        except Exception as e:
+            print(e)
+            if i == len(keys) - 1:
+                return
 
     try:
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']

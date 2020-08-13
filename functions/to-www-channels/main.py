@@ -29,8 +29,8 @@ def populate(c, pl):
     c['last_search_time'] = pl.get('last_search_time')
     c['genres'] = pl.get('genres')
 
-def handle(event, context):
 
+def handle(event, context):
     from pprint import pprint
     pprint(event)
     # Get single channel from query param "id"
