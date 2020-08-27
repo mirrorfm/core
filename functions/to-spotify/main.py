@@ -172,7 +172,7 @@ def get_last_playlist_for_channel(channel_id):
         Limit=1
     )
     if res['Count'] == 0:
-        return None
+        return None, None
     return [res['Items'][0], res['Items'][0]['num']]
 
 
@@ -225,8 +225,10 @@ def create_playlist_for_channel(sp, channel_id, num=1):
 
 
 def get_playlist_for_channel(sp, channel_id):
-    return get_last_playlist_for_channel(channel_id) or \
-        create_playlist_for_channel(sp, channel_id)
+    pl, num = get_last_playlist_for_channel(channel_id)
+    if pl:
+        return pl, num
+    return create_playlist_for_channel(sp, channel_id)
 
 
 def is_track_duplicate(channel_id, track_spotify_uri):
