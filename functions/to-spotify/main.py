@@ -172,7 +172,7 @@ def get_last_playlist_for_channel(channel_id):
         Limit=1
     )
     if res['Count'] == 0:
-        return
+        return None
     return [res['Items'][0], res['Items'][0]['num']]
 
 
@@ -260,9 +260,9 @@ def playlist_seems_full(e, sp, spotify_playlist):
 
 
 def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
+    item, playlist_num = get_playlist_for_channel(sp, channel_id)
+    spotify_playlist = item['spotify_playlist']
     try:
-        item, playlist_num = get_playlist_for_channel(sp, channel_id)
-        spotify_playlist = item['spotify_playlist']
         sp.user_playlist_add_tracks(SPOTIPY_USER,
                                     spotify_playlist,
                                     [track_spotify_uri],

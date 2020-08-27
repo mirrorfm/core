@@ -11,12 +11,10 @@ sys.path.append(module_path)
 from pprint import pprint
 from googleapiclient import discovery
 from datetime import datetime, timezone, timedelta
-import time
 
 import dateutil.parser
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
-from botocore.exceptions import ClientError
 
 # Hide warnings https://github.com/googleapis/google-api-python-client/issues/299
 import logging
@@ -26,6 +24,7 @@ logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
 mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
+mirrorfm_yt_tracks = dynamodb.Table('mirrorfm_yt_tracks')
 
 scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
@@ -225,23 +224,20 @@ def handle(event, context):
                 break
 
     i = 0
-    for items in chunks(new_items_desc, 25):
-        batch = []
-        for item in items:
-            id = get_video_id(process_full_list, item['contentDetails'])
-            put_request = { 'PutRequest': { 'Item': {
-                'yt_channel_id': channel_id,
-                'yt_track_composite': '-'.join([item['snippet']['publishedAt'], id]),
-                'yt_track_id': id,
-                'yt_track_name': str(item['snippet']['title']),
-                'yt_published_at': item['snippet']['publishedAt']
-            }}}
-            batch.append(put_request)
-        dynamodb.batch_write_item(RequestItems={
-           'mirrorfm_yt_tracks': batch
-        })
-        i += 1
-        print("Batch sent %d/%d" % (i * 25, int(len(new_items_desc) / 25 + 1) * 25))
+    with mirrorfm_yt_tracks.batch_writer(overwrite_by_pkeys=["yt_channel_id", "yt_track_composite"]) as batch:
+        for item in new_items_desc:
+            track_id = get_video_id(process_full_list, item['contentDetails'])
+            batch.put_item(
+                Item={
+                    'yt_channel_id': channel_id,
+                    'yt_track_composite': '-'.join([str(item['snippet']['publishedAt']), track_id]),
+                    'yt_track_id': track_id,
+                    'yt_track_name': str(item['snippet']['title']),
+                    'yt_published_at': item['snippet']['publishedAt']
+                }
+            )
+            i += 1
+            print(i)
 
     # Update channel row with last_upload_datetime
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
@@ -264,7 +260,8 @@ def handle(event, context):
 # Quick local tests
 if __name__ == "__main__":
     # Check next item (CRON mode)
-    handle({}, {})
+    # handle({}, {})
 
-#     Add new channel
-#     handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCPvkTCeGc0U7KUL5QVcKF-w'}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': 'UCPvkTCeGc0U7KUL5QVcKF-w'}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
+    # Add new channel
+    channel_id = "UCqTwKvjbTENZDGbz2si47ag"
+    handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})

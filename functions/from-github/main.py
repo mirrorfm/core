@@ -34,18 +34,20 @@ def handle(event, context):
     )
 
     if 'Item' in last_successful_entry and last_successful_entry['Item'] != {}:
-        current = int(last_successful_entry['Item']['value']) + 1
+        current = int(last_successful_entry['Item']['value'])
     else:
         # no cursor, query first
         current = 1  # file has headers
 
-    total = len(lines)
+    total = len(lines) - 1
 
-    while current < len(lines):
+    while current <= total:
         print(current, "/", total)
 
         current_line = lines[current]
-        channel_id = str(current_line, 'utf-8').split(',')[0]
+        line = str(current_line, 'utf-8').split(',')
+        channel_id = line[0]
+        channel_name = line[1]
 
         if not channel_id or channel_id == "":
             print("line", current, "is empty")
@@ -59,15 +61,16 @@ def handle(event, context):
                 },
                 ConditionExpression='attribute_not_exists(yt) and attribute_not_exists(channel_id)'
             )
+            print('Added', channel_name)
         except ClientError:
-            print('Duplicate', channel_id, '(nothing to do)')
+            print('Duplicate', channel_name, '(nothing to do)')
 
         current += 1
 
     mirrorfm_cursors.put_item(
         Item={
             'name': 'last_successful_entry',
-            'value': current
+            'value': current - 1
         }
     )
 
