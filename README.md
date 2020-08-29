@@ -13,7 +13,8 @@ This repository contains the code for the main background processes.
 
  - Automatically builds Spotify playlists from any YouTube music channel,
  - Constantly check for new YouTube uploads,
- - Find previously unreleased YouTube songs that were released on Spotify today.
+ - Find previously unreleased YouTube songs that were released on Spotify today,
+ - Provide backups for deleted, hacked or terminated YouTube channels.
 
 ## Lambdas
 
