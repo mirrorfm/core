@@ -11,6 +11,7 @@ sys.path.append(module_path)
 from pprint import pprint
 from googleapiclient import discovery
 from datetime import datetime, timezone, timedelta
+import types
 
 import dateutil.parser
 import boto3
@@ -30,8 +31,7 @@ scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 
 def yt_developer_keys():
-    envs = os.environ
-    return [os.environ.get(env) for env in envs if env.startswith('YT_DEVELOPER_KEY')]
+    return [os.environ.get(env) for env in os.environ if env.startswith('YT_DEVELOPER_KEY')]
 
 
 def get_datetime_from_iso8601_string(s):
@@ -67,17 +67,34 @@ def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, l
     return next_last_upload_datetime
 
 
+def _flush(self):
+    items_to_send = self._items_buffer[:self._flush_amount]
+    self._items_buffer = self._items_buffer[self._flush_amount:]
+    self._response = self._client.batch_write_item(
+        RequestItems={self._table_name: items_to_send})
+    unprocessed_items = self._response['UnprocessedItems']
+
+    if unprocessed_items and unprocessed_items[self._table_name]:
+        # Any unprocessed_items are immediately added to the
+        # next batch we send.
+        self._items_buffer.extend(unprocessed_items[self._table_name])
+    else:
+        self._items_buffer = []
+    print("Batch write sent", len(items_to_send), "unprocessed:", len(self._items_buffer))
+
+
 def handle(event, context):
     upload_playlist_id = None
     last_upload_datetime = None
     old_yt_count_tracks = 0
-    print(event)
+
+    print("Event:", event)
+
     if 'Records' in event:
         # A channel_id was added to the `mirrorfm_channels` dynamodb table
         if event['Records'][0]['eventName'] != "INSERT":
             # Ignore row updates
             return
-        print(event)
         channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
     else:
         # The lambda was triggered by CRON
@@ -134,8 +151,12 @@ def handle(event, context):
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
     keys = yt_developer_keys()
+
+    if len(keys) == 0:
+        raise(Exception("Missing YT_DEVELOPER_KEY env"))
+
     for i, key in enumerate(keys):
-        print(key)
+        print(i, key)
         youtube = discovery.build("youtube", "v3", developerKey=key)
 
         try:
@@ -144,9 +165,9 @@ def handle(event, context):
                 id=channel_id
             ).execute()
         except Exception as e:
-            print(e)
+            print(i, key, e)
             if i == len(keys) - 1:
-                return
+                raise(Exception("Quota exceeded on all developer keys"))
 
     try:
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
@@ -154,8 +175,10 @@ def handle(event, context):
         thumbnails = response['items'][0]['snippet']['thumbnails']
     except IndexError as e:
         # Ignore malformatted event / channel_id
+        # It's likely the channel has been removed or terminated
         print(e)
         return
+
     print(channel_name)
 
     mirrorfm_channels.update_item(
@@ -223,8 +246,8 @@ def handle(event, context):
             else:
                 break
 
-    i = 0
     with mirrorfm_yt_tracks.batch_writer(overwrite_by_pkeys=["yt_channel_id", "yt_track_composite"]) as batch:
+        batch._flush = types.MethodType(_flush, batch)
         for item in new_items_desc:
             track_id = get_video_id(process_full_list, item['contentDetails'])
             batch.put_item(
@@ -236,8 +259,6 @@ def handle(event, context):
                     'yt_published_at': item['snippet']['publishedAt']
                 }
             )
-            i += 1
-            print(i)
 
     # Update channel row with last_upload_datetime
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
@@ -260,8 +281,8 @@ def handle(event, context):
 # Quick local tests
 if __name__ == "__main__":
     # Check next item (CRON mode)
-    # handle({}, {})
+    handle({}, {})
 
     # Add new channel
-    channel_id = "UCqTwKvjbTENZDGbz2si47ag"
-    handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
+    # channel_id = "UCqTwKvjbTENZDGbz2si47ag"
+    # handle({'Records': [{'eventID': '4fe2aab7e1e242ae10debd11ce811eb7', 'eventName': 'INSERT', 'eventVersion': '1.1', 'eventSource': 'aws:dynamodb', 'awsRegion': 'eu-west-1', 'dynamodb': {'ApproximateCreationDateTime': 1572478081.0, 'Keys': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'NewImage': {'host': {'S': 'yt'}, 'channel_id': {'S': channel_id}}, 'SequenceNumber': '75150100000000017939913152', 'SizeBytes': 80, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}, 'eventSourceARN': 'arn:aws:dynamodb:eu-west-1:705440408593:table/mirrorfm_channels/stream/2019-10-16T21:39:59.018'}]}, {})
