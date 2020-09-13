@@ -1,6 +1,5 @@
 env/
 env.json
 project.json
-.cache-*
-rds_config.py
+.cache*
 *.pyc
