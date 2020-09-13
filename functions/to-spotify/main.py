@@ -23,7 +23,25 @@ import json
 from boto3.dynamodb.types import TypeDeserializer
 from boto3.dynamodb.conditions import Key
 import boto3
+import pymysql
 
+name = os.getenv('DB_USERNAME')
+password = os.getenv('DB_PASSWORD')
+db_name = os.getenv('DB_NAME')
+host = os.getenv('DB_HOST')
+
+
+try:
+    conn = pymysql.connect(host,
+                           user=name,
+                           passwd=password,
+                           db=db_name,
+                           connect_timeout=5,
+                           cursorclass=pymysql.cursors.DictCursor)
+except pymysql.MySQLError as e:
+    print("ERROR: Unexpected error: Could not connect to MySQL instance.")
+    print(e)
+    sys.exit()
 
 deser = TypeDeserializer()
 
@@ -65,8 +83,6 @@ BATCH_GET_SIZE = 1000
 client = boto3.client("dynamodb", region_name='eu-west-1')
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 cursors_table = dynamodb.Table('mirrorfm_cursors')
-playlists_table = dynamodb.Table('mirrorfm_yt_playlists')
-mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
 tracks_table = dynamodb.Table('mirrorfm_yt_tracks')
 duplicates_table = dynamodb.Table('mirrorfm_yt_duplicates')
 events_table = dynamodb.Table('mirrorfm_events')
@@ -74,8 +90,8 @@ events_table = dynamodb.Table('mirrorfm_events')
 # Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
-SPOTIPY_USER = os.getenv('SPOTIPY_USER')
 SPOTIPY_REDIRECT_URI = 'http://localhost/'
+SPOTIPY_USER = os.getenv('SPOTIPY_USER')
 
 scope = 'playlist-read-private playlist-modify-private playlist-modify-public ugc-image-upload'
 
@@ -113,7 +129,7 @@ def restore_spotify_token():
         return 0
 
     token = res['Item']['value']
-    with open("/tmp/.cache-" + SPOTIPY_USER, "w+") as f:
+    with open("/tmp/.cache", "w+") as f:
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
                                   cls=DecimalEncoder))
@@ -138,7 +154,7 @@ def get_spotify():
         SPOTIPY_CLIENT_SECRET,
         SPOTIPY_REDIRECT_URI,
         scope=scope,
-        cache_path='/tmp/.cache-' + SPOTIPY_USER
+        cache_path='/tmp/.cache'
     )
 
     token_info = sp_oauth.get_cached_token()
@@ -166,29 +182,20 @@ def find_on_spotify(sp, track_name):
 
 
 def get_last_playlist_for_channel(channel_id):
-    res = playlists_table.query(
-        ScanIndexForward=False,
-        KeyConditionExpression=Key('yt_channel_id').eq(channel_id),
-        Limit=1
-    )
-    if res['Count'] == 0:
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM yt_playlists WHERE channel_id="%s" ORDER BY num DESC LIMIT 1' % channel_id)
+    playlist = cursor.fetchone()
+    if not playlist:
         return None, None
-    return [res['Items'][0], res['Items'][0]['num']]
+    return [playlist, playlist['num']]  # full item, num
 
 
-def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
-    resp = mirrorfm_channels.get_item(
-        Key={
-            'host': 'yt',
-            'channel_id': channel_id
-        },
-        AttributesToGet=[
-            'thumbnails'
-        ]
-    )
-    print(resp)
-    if 'Item' in resp:
-        image_url = resp['Item']['thumbnails']['medium']['url']
+def add_channel_cover_to_playlist(sp, playlist_id):
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM yt_channels WHERE playlist_id="%s"' % playlist_id)
+    row = cursor.fetchone()
+    if row:
+        image_url = row['thumbnails']['medium']['url']
         sp.playlist_upload_cover_image(
             playlist_id, get_as_base64(image_url))
 
@@ -198,27 +205,25 @@ def get_as_base64(url):
 
 
 def create_playlist_for_channel(sp, channel_id, num=1):
-    res = mirrorfm_channels.query(
-        ScanIndexForward=False,
-        KeyConditionExpression=Key('host').eq(
-            'yt') & Key('channel_id').eq(channel_id),
-        Limit=1
-    )
-    playlist_name = res['Items'][0]['channel_name']
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM yt_playlists WHERE channel_id=%s LIMIT 1 DESC" % channel_id)
+    row = cursor.fetchone()
+    playlist_name = row['playlist_name']
     if num > 1:
         playlist_name += ' (%d)' % num
     res = sp.user_playlist_create(SPOTIPY_USER, playlist_name, public=True)
-    plid = res['id']
+    playlist_id = res['id']
     item = {
         'yt_channel_id': channel_id,
         'num': num,
-        'spotify_playlist': plid
+        'spotify_playlist': playlist_id
     }
-    playlists_table.put_item(
-        Item=item
-    )
+    cur = conn.cursor()
+    cur.execute('insert into yt_playlists (channel_id, num, spotify_playlist) values(%s, %s, %s)',
+                [channel_id, num, playlist_id])
+    conn.commit()
     try:
-        add_channel_cover_to_playlist(sp, channel_id, plid)
+        add_channel_cover_to_playlist(sp, channel_id, playlist_id)
     except Exception as e:
         print(e)
     return [item, num]
@@ -240,8 +245,7 @@ def is_track_duplicate(channel_id, track_spotify_uri):
     )
 
 
-def add_track_to_duplicate_index(
-        channel_id, track_spotify_uri, spotify_playlist):
+def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist):
     duplicates_table.put_item(
         Item={
             'yt_channel_id': channel_id,
@@ -357,64 +361,47 @@ def spotify_lookup(sp, record):
 
 
 def get_current_or_next_channel():
-    exclusive_start_yt_channel_track_key = get_cursor(
-        'exclusive_start_yt_channel_track_key')
-    if 'Item' in exclusive_start_yt_channel_track_key and exclusive_start_yt_channel_track_key['Item'] != {}:
-        channel_to_process = mirrorfm_channels.query(
-            Limit=1,
-            ExclusiveStartKey=exclusive_start_yt_channel_track_key['Item']['value'],
-            KeyConditionExpression=Key('host').eq('yt'))
-    else:
-        # no cursor, query first
-        channel_to_process = mirrorfm_channels.query(
-            Limit=1,
-            KeyConditionExpression=Key('host').eq('yt'))
-
-    if 'LastEvaluatedKey' not in channel_to_process:
-        print("No next channel, re-initialize cursor")
-        cursors_table.delete_item(
-            Key={
-                'name': 'exclusive_start_yt_channel_track_key'
-            }
-        )
-        return get_current_or_next_channel()
-    return channel_to_process
+    last_successful_entry = get_cursor('last_successful_entry')
+    cursor = conn.cursor()
+    if 'Item' in last_successful_entry and last_successful_entry['Item']['value']:
+        cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" %
+                       str(int(last_successful_entry['Item']['value']) + 1))
+        channel = cursor.fetchone()
+        if channel:
+            return channel
+    cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+    return cursor.fetchone()
 
 
-def save_cursors(just_processed_tracks, just_processed_channel):
-    print('just_processed_channel', just_processed_channel)
+def save_cursors(just_processed_tracks, last_successful_entry):
+    print('last_successful_entry', last_successful_entry)
     if 'LastEvaluatedKey' in just_processed_tracks:
         print('LastEvaluatedKey in just_processed_tracks')
-        set_cursor('exclusive_start_yt_track_key',
-                   just_processed_tracks['LastEvaluatedKey'])
-        print('set cursor exclusive_start_yt_track_key with', just_processed_tracks['LastEvaluatedKey'])
+        set_cursor('start_yt_track_key', just_processed_tracks['LastEvaluatedKey'])
+        print('set cursor start_yt_track_key with', just_processed_tracks['LastEvaluatedKey'])
     else:
         print('no LastEvaluatedKey in just_processed_tracks')
         cursors_table.delete_item(
             Key={
-                'name': 'exclusive_start_yt_track_key'
+                'name': 'start_yt_track_key'
             }
         )
-        print('deleted exclusive_start_yt_track_key')
-        if 'LastEvaluatedKey' in just_processed_channel:
-            print('LastEvaluatedKey is in just_processed_channel')
-            set_cursor(
-                'exclusive_start_yt_channel_track_key',
-                just_processed_channel['LastEvaluatedKey'])
-            print('set cursor exclusive_start_yt_channel_track_key with', just_processed_channel['LastEvaluatedKey'])
+        print('deleted start_yt_track_key')
+        set_cursor('last_successful_entry', last_successful_entry)
+        print('set cursor last_successful_entry with', last_successful_entry)
 
 
 def get_next_tracks(channel_id):
-    exclusive_start_yt_track_key = get_cursor('exclusive_start_yt_track_key')
-    if 'Item' in exclusive_start_yt_track_key:
+    start_yt_track_key = get_cursor('start_yt_track_key')
+    if 'Item' in start_yt_track_key:
         print(
             "Starting from track",
-            exclusive_start_yt_track_key['Item']['value']['yt_track_composite'])
+            start_yt_track_key['Item']['value']['yt_track_composite'])
         print(channel_id)
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
-            ExclusiveStartKey=exclusive_start_yt_track_key['Item']['value'],
+            ExclusiveStartKey=start_yt_track_key['Item']['value'],
             KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
     else:
         print("Starting from first track")
@@ -452,12 +439,11 @@ def handle(event, context):
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
-        channel_name = None
-
+        channel_aid = channel_to_process['id']
+        channel_id = channel_to_process['channel_id']
+        print(channel_id)
         # Channel might not have a name yet if it has just been added
-        if 'channel_name' in channel_to_process['Items'][0]:
-            channel_name = channel_to_process['Items'][0]['channel_name']
-        channel_id = channel_to_process['Items'][0]['channel_id']
+        channel_name = channel_to_process['channel_name']
 
         print("Rediscovering channel", channel_name or channel_id)
 
@@ -468,7 +454,7 @@ def handle(event, context):
                 total_searched += 1
                 if spotify_lookup(sp, record):
                     total_added += 1
-        save_cursors(tracks_to_process, channel_to_process)
+        save_cursors(tracks_to_process, channel_aid)
 
     if total_searched > 0:
         print(
@@ -481,11 +467,7 @@ def handle(event, context):
         pl_id = pl_item['spotify_playlist']
         pl = sp.playlist(pl_id)
 
-        update_expr = "set count_followers = :count_followers, last_search_time = :last_search_time"
-        expr_attrs = {
-             ':count_followers': pl["followers"]["total"],
-             ':last_search_time': int(time.time())
-        }
+        cursor = conn.cursor()
 
         if total_added > 0:
             if 'genres' in pl_item:
@@ -497,11 +479,6 @@ def handle(event, context):
                 playlist_genres = count_frequency(NEW_TRACKS_GENRES)
             pprint(count_frequency(NEW_TRACKS_GENRES))
 
-            update_expr += ", genres = :genres, last_found_time = :last_found_time, count_tracks = :count_tracks"
-            expr_attrs[':last_found_time'] = int(time.time())
-            expr_attrs[':genres'] = playlist_genres
-            expr_attrs[':count_tracks'] = pl["tracks"]["total"]
-
             events_table.put_item(
                 Item={
                     'host': 'yt',
@@ -512,14 +489,12 @@ def handle(event, context):
                     'spotify_playlist': pl_id
                 }
             )
-        playlists_table.update_item(
-            Key={
-                'yt_channel_id': channel_id,
-                'num': pl_item['num']
-            },
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_attrs
-        )
+            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now(), count_tracks="%s", last_found_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+                           [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
+        else:
+            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+                           [pl["followers"]["total"], pl_id, num])
+        conn.commit()
 
 
 if __name__ == "__main__":
