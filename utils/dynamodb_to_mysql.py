@@ -7,6 +7,8 @@ from decimal import Decimal
 import decimal
 from datetime import datetime
 import json
+import os
+import pymysql
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -17,14 +19,10 @@ mirrorfm_yt_playlists = dynamodb.Table('mirrorfm_yt_playlists')
 mirrorfm_yt_channels = dynamodb.Table('mirrorfm_channels')
 
 
-# RDS settings
-import rds_config
-import pymysql
-
-host = rds_config.db_host
-name = rds_config.db_username
-password = rds_config.db_password
-db_name = rds_config.db_name
+host = os.getenv('DB_HOST')
+name = os.getenv('DB_USERNAME')
+password = os.getenv('DB_PASSWORD')
+db_name = os.getenv('DB_NAME')
 
 try:
     conn = pymysql.connect(host, user=name, passwd=password, db=db_name, connect_timeout=5)
@@ -86,5 +84,3 @@ with conn.cursor() as cur:
                     ])
 
     conn.commit()
-
-

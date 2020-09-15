@@ -190,12 +190,13 @@ def get_last_playlist_for_channel(channel_id):
     return [playlist, playlist['num']]  # full item, num
 
 
-def add_channel_cover_to_playlist(sp, playlist_id):
+def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM yt_channels WHERE playlist_id="%s"' % playlist_id)
+    cursor.execute('SELECT * FROM yt_channels WHERE channel_id="%s"' % channel_id)
     row = cursor.fetchone()
     if row:
-        image_url = row['thumbnails']['medium']['url']
+        thumbnails = json.loads(row['thumbnails'])
+        image_url = thumbnails['medium']['url']
         sp.playlist_upload_cover_image(
             playlist_id, get_as_base64(image_url))
 
@@ -206,9 +207,11 @@ def get_as_base64(url):
 
 def create_playlist_for_channel(sp, channel_id, num=1):
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_playlists WHERE channel_id=%s LIMIT 1 DESC" % channel_id)
+    cursor.execute("SELECT * FROM yt_channels WHERE channel_id='%s'" % channel_id)
     row = cursor.fetchone()
-    playlist_name = row['playlist_name']
+    print(row)
+
+    playlist_name = row['channel_name']
     if num > 1:
         playlist_name += ' (%d)' % num
     res = sp.user_playlist_create(SPOTIPY_USER, playlist_name, public=True)
@@ -364,7 +367,7 @@ def get_current_or_next_channel():
     last_successful_entry = get_cursor('last_successful_entry')
     cursor = conn.cursor()
     if 'Item' in last_successful_entry and last_successful_entry['Item']['value']:
-        cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" %
+        cursor.execute("SELECT * FROM yt_channels WHERE id=%s" %
                        str(int(last_successful_entry['Item']['value']) + 1))
         channel = cursor.fetchone()
         if channel:
@@ -373,8 +376,8 @@ def get_current_or_next_channel():
     return cursor.fetchone()
 
 
-def save_cursors(just_processed_tracks, last_successful_entry):
-    print('last_successful_entry', last_successful_entry)
+def save_cursors(just_processed_tracks, to_spotify_last_successful_channel):
+    print('to_spotify_last_successful_channel', to_spotify_last_successful_channel)
     if 'LastEvaluatedKey' in just_processed_tracks:
         print('LastEvaluatedKey in just_processed_tracks')
         set_cursor('start_yt_track_key', just_processed_tracks['LastEvaluatedKey'])
@@ -387,8 +390,8 @@ def save_cursors(just_processed_tracks, last_successful_entry):
             }
         )
         print('deleted start_yt_track_key')
-        set_cursor('last_successful_entry', last_successful_entry)
-        print('set cursor last_successful_entry with', last_successful_entry)
+        set_cursor('to_spotify_last_successful_channel', to_spotify_last_successful_channel)
+        print('set cursor to_spotify_last_successful_channel with', to_spotify_last_successful_channel)
 
 
 def get_next_tracks(channel_id):
