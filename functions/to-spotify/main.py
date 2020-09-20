@@ -364,7 +364,7 @@ def spotify_lookup(sp, record):
 
 
 def get_current_or_next_channel():
-    last_successful_entry = get_cursor('last_successful_entry')
+    last_successful_entry = get_cursor('to_spotify_last_successful_channel')
     cursor = conn.cursor()
     if 'Item' in last_successful_entry and last_successful_entry['Item']['value']:
         cursor.execute("SELECT * FROM yt_channels WHERE id=%s" %
