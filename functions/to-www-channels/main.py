@@ -15,8 +15,7 @@ import simplejson as json
 
 client = boto3.client("dynamodb", region_name='eu-west-1')
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
-mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
-mirrorfm_yt_playlists = dynamodb.Table('mirrorfm_yt_playlists')
+
 
 def get_table_count(table_name):
     return client.describe_table(TableName=table_name)["Table"]["ItemCount"]

@@ -1,4 +1,4 @@
-#!/usr/bin/python3.6
+#!/usr/bin/python3.7
 
 import os
 import sys
@@ -15,7 +15,11 @@ import types
 
 import dateutil.parser
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+import pymysql
+import json
+
+import pytz
+utc=pytz.UTC
 
 # Hide warnings https://github.com/googleapis/google-api-python-client/issues/299
 import logging
@@ -23,9 +27,27 @@ logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 
 # DB
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
-mirrorfm_channels = dynamodb.Table('mirrorfm_channels')
 mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
 mirrorfm_yt_tracks = dynamodb.Table('mirrorfm_yt_tracks')
+
+
+name = os.getenv('DB_USERNAME')
+password = os.getenv('DB_PASSWORD')
+db_name = os.getenv('DB_NAME')
+host = os.getenv('DB_HOST')
+
+
+try:
+    conn = pymysql.connect(host,
+                           user=name,
+                           passwd=password,
+                           db=db_name,
+                           connect_timeout=5,
+                           cursorclass=pymysql.cursors.DictCursor)
+except pymysql.MySQLError as e:
+    print("ERROR: Unexpected error: Could not connect to MySQL instance.")
+    print(e)
+    sys.exit()
 
 scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
@@ -58,11 +80,12 @@ def get_video_id(playlist_item, item_content):
 
 
 def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list):
-    item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt'])
-    if item_datetime > last_upload_datetime:
+    next_last_upload_datetime = next_last_upload_datetime.replace(tzinfo=utc)
+    item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt']).replace(tzinfo=utc)
+    if item_datetime > last_upload_datetime.replace(tzinfo=utc):
         print(get_video_id(process_full_list, item['contentDetails']) + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
         new_items_desc.append(item)
-        if item_datetime > next_last_upload_datetime:
+        if item_datetime > next_last_upload_datetime.replace(tzinfo=utc):
             return item_datetime
     return next_last_upload_datetime
 
@@ -83,6 +106,28 @@ def _flush(self):
     print("Batch write sent", len(items_to_send), "unprocessed:", len(self._items_buffer))
 
 
+def get_next_channel():
+    from_youtube_last_successful_channel = mirrorfm_cursors.get_item(
+        Key={
+            'name': 'from_youtube_last_successful_channel'
+        },
+        AttributesToGet=[
+            'value'
+        ]
+    )
+
+    cursor = conn.cursor()
+
+    if 'Item' in from_youtube_last_successful_channel and from_youtube_last_successful_channel['Item']['value']:
+        cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" %
+                       str(int(from_youtube_last_successful_channel['Item']['value']) + 1))
+        channel = cursor.fetchone()
+        if channel:
+            return channel
+    cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+    return cursor.fetchone()
+
+
 def handle(event, context):
     upload_playlist_id = None
     last_upload_datetime = None
@@ -91,56 +136,23 @@ def handle(event, context):
     print("Event:", event)
 
     if 'Records' in event:
-        # A channel_id was added to the `mirrorfm_channels` dynamodb table
-        if event['Records'][0]['eventName'] != "INSERT":
-            # Ignore row updates
-            return
-        channel_id = event['Records'][0]['dynamodb']['Keys']['channel_id']['S']
+        # A channel_id was added to the `yt_channels` table
+        print(event)
+        channel_id = event['Records'][0]['Sns']['Message']
     else:
         # The lambda was triggered by CRON
-        exclusive_start_yt_channel_key = mirrorfm_cursors.get_item(
-            Key={
-                'name': 'exclusive_start_yt_channel_key'
-            },
-            AttributesToGet=[
-                'value'
-            ]
+        channel = get_next_channel()
+        mirrorfm_cursors.put_item(
+            Item={
+                'name': 'from_youtube_last_successful_channel',
+                'value': channel['id']
+            }
         )
-
-        if 'Item' in exclusive_start_yt_channel_key and exclusive_start_yt_channel_key['Item'] != {}:
-            channel_info = mirrorfm_channels.query(
-                Limit=1,
-                ExclusiveStartKey=exclusive_start_yt_channel_key['Item']['value'],
-                KeyConditionExpression=Key('host').eq('yt'))
-        else:
-            # no cursor, query first
-            channel_info = mirrorfm_channels.query(
-                Limit=1,
-                KeyConditionExpression=Key('host').eq('yt'))
-
-        # Only do this if successful
-        if 'LastEvaluatedKey' in channel_info:
-            exclusive_start_yt_channel_key = channel_info['LastEvaluatedKey']
-            mirrorfm_cursors.put_item(
-                Item={
-                    'name': 'exclusive_start_yt_channel_key',
-                    'value': exclusive_start_yt_channel_key
-                }
-            )
-        else:
-            mirrorfm_cursors.delete_item(
-                Key={
-                    'name': 'exclusive_start_yt_channel_key'
-                }
-            )
-            # TODO could re-try instead of stopping
-            return
-        channel_info = channel_info['Items'][0]
-        channel_id = channel_info['channel_id']
-        if 'last_upload_datetime' in channel_info:
-            last_upload_datetime = get_datetime_from_iso8601_string(channel_info['last_upload_datetime'])
-        if 'count_tracks' in channel_info:
-            old_yt_count_tracks = channel_info['count_tracks']
+        channel_id = channel['channel_id']
+        if 'last_upload_datetime' in channel:
+            last_upload_datetime = channel['last_upload_datetime']
+        if 'count_tracks' in channel:
+            old_yt_count_tracks = channel['count_tracks']
 
     print(last_upload_datetime)
     print(upload_playlist_id)
@@ -164,6 +176,7 @@ def handle(event, context):
                 part="contentDetails,snippet",
                 id=channel_id
             ).execute()
+            break
         except Exception as e:
             print(i, key, e)
             if i == len(keys) - 1:
@@ -181,18 +194,10 @@ def handle(event, context):
 
     print(channel_name)
 
-    mirrorfm_channels.update_item(
-        Key={
-            'host': 'yt',
-            'channel_id': channel_id
-        },
-        UpdateExpression="set upload_playlist_id = :upload_playlist_id, thumbnails = :thumbnails, channel_name = :channel_name",
-        ExpressionAttributeValues={
-            ':channel_name': channel_name,
-            ':upload_playlist_id': upload_playlist_id,
-            ':thumbnails': thumbnails
-        }
-    )
+    cur = conn.cursor()
+    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnails = %s WHERE channel_id = %s",
+                [channel_name, upload_playlist_id, json.dumps(thumbnails), channel_id])
+    conn.commit()
 
     if not last_upload_datetime:
         process_full_list = True
@@ -201,7 +206,7 @@ def handle(event, context):
         process_full_list = False
 
     next_last_upload_datetime = last_upload_datetime
-    pageToken = ""
+    page_token = ""
     new_items_desc = []
 
     if process_full_list:
@@ -211,7 +216,7 @@ def handle(event, context):
                     part="snippet,contentDetails",
                     playlistId=upload_playlist_id,
                     maxResults=50,
-                    pageToken=pageToken
+                    pageToken=page_token
                 ).execute()
             except Exception as e:
                 print(e)
@@ -219,7 +224,7 @@ def handle(event, context):
             for item in response['items']:
                 next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
             if 'nextPageToken' in response:
-                pageToken = response['nextPageToken']
+                page_token = response['nextPageToken']
             else:
                 break
         # Reverse because YT API does not allow ASC
@@ -232,7 +237,7 @@ def handle(event, context):
                     part="snippet,contentDetails",
                     channelId=channel_id,
                     maxResults=50,
-                    pageToken=pageToken,
+                    pageToken=page_token,
                     publishedAfter=datetime_to_zulu(last_upload_datetime)
                 ).execute()
             except Exception as e:
@@ -242,7 +247,7 @@ def handle(event, context):
                 if item['snippet']['type'] == 'upload':
                     next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
             if 'nextPageToken' in response:
-                pageToken = response['nextPageToken']
+                page_token = response['nextPageToken']
             else:
                 break
 
@@ -263,17 +268,12 @@ def handle(event, context):
     # Update channel row with last_upload_datetime
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
         print(next_last_upload_datetime)
-        mirrorfm_channels.update_item(
-            Key={
-                'host': 'yt',
-                'channel_id': channel_id
-            },
-            UpdateExpression="set last_upload_datetime = :last_upload_datetime, count_tracks = :count_tracks",
-            ExpressionAttributeValues={
-                ':last_upload_datetime': datetime_to_zulu(next_last_upload_datetime),
-                ':count_tracks': old_yt_count_tracks + len(new_items_desc)
-            }
-        )
+        last_upload_datetime = datetime_to_zulu(next_last_upload_datetime)
+        count_tracks = old_yt_count_tracks + len(new_items_desc)
+        cur = conn.cursor()
+        cur.execute('UPDATE yt_channels SET last_upload_datetime="%s", count_tracks="%s" WHERE id="%s"',
+                              [last_upload_datetime, count_tracks, channel_id])
+        conn.commit()
     else:
         print("No new tracks")
 
