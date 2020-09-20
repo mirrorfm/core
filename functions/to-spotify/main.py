@@ -224,7 +224,6 @@ def create_playlist_for_channel(sp, channel_id, num=1):
     cur = conn.cursor()
     cur.execute('insert into yt_playlists (channel_id, num, spotify_playlist) values(%s, %s, %s)',
                 [channel_id, num, playlist_id])
-    conn.commit()
     try:
         add_channel_cover_to_playlist(sp, channel_id, playlist_id)
     except Exception as e:
@@ -301,8 +300,7 @@ def count_frequency(items):
     return freq
 
 
-def find_genres(sp, info):
-    global NEW_TRACKS_GENRES
+def find_genres(sp, info, new_track_genres):
     album = sp.album(info['album']['id'])
     song_genres = album['genres']
 
@@ -310,18 +308,11 @@ def find_genres(sp, info):
         info = sp.artist(artist['id'])
         song_genres = song_genres + info['genres']
 
-    NEW_TRACKS_GENRES += song_genres
+    new_track_genres += song_genres
     return song_genres
 
 
-def merge_genres(old_tracks_genres, new_tracks_genres):
-    from collections import Counter
-    A = Counter(old_tracks_genres)
-    B = Counter(new_tracks_genres)
-    return dict(A + B)
-
-
-def spotify_lookup(sp, record):
+def spotify_lookup(sp, record, new_track_genres):
     spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
 
     # Safety duplicate check needed because
@@ -337,7 +328,7 @@ def spotify_lookup(sp, record):
             "\n",
             "\t\t\t\t\t",
             record['yt_track_name'])
-        genres = find_genres(sp, spotify_track_info)
+        genres = find_genres(sp, spotify_track_info, new_track_genres)
         spotify_playlist = add_track_to_spotify_playlist(
             sp, spotify_track_info['uri'], record['yt_channel_id'])
         tracks_table.update_item(
@@ -422,8 +413,7 @@ def deserialize_record(record):
 
 
 def handle(event, context):
-    global NEW_TRACKS_GENRES
-    NEW_TRACKS_GENRES = []
+    new_track_genres = []
 
     sp = get_spotify()
     total_added = total_searched = 0
@@ -436,9 +426,13 @@ def handle(event, context):
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
                 total_searched += 1
-                if spotify_lookup(sp, deserialize_record(record)):
+                if spotify_lookup(sp, deserialize_record(record), new_track_genres):
                     total_added += 1
                 channel_id = record['NewImage']['yt_channel_id']['S']
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+                channel = cursor.fetchone()
+                channel_aid = channel['aid']
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()
@@ -455,7 +449,7 @@ def handle(event, context):
         for record in tracks_to_process['Items']:
             if 'spotify_uri' not in record:
                 total_searched += 1
-                if spotify_lookup(sp, record):
+                if spotify_lookup(sp, record, new_track_genres):
                     total_added += 1
         save_cursors(tracks_to_process, channel_aid)
 
@@ -473,31 +467,31 @@ def handle(event, context):
         cursor = conn.cursor()
 
         if total_added > 0:
-            if 'genres' in pl_item:
-                old_tracks_genres = pl_item['genres']
-                playlist_genres = merge_genres(
-                    old_tracks_genres,
-                    count_frequency(NEW_TRACKS_GENRES))
-            else:
-                playlist_genres = count_frequency(NEW_TRACKS_GENRES)
-            pprint(count_frequency(NEW_TRACKS_GENRES))
+            playlist_genres = count_frequency(new_track_genres)
+            pprint(playlist_genres)
 
+            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now(), count_tracks="%s", last_found_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+                           [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
+            for genre in playlist_genres:
+                cursor.execute(
+                    'INSERT INTO yt_genres (yt_channel_id, genre_name, count, last_updated) VALUES ("%s", %s, 1, NOW()) ON DUPLICATE KEY UPDATE count = count + 1, last_updated=NOW()',
+                    [channel_aid, genre])
+
+            conn.commit()
             events_table.put_item(
                 Item={
                     'host': 'yt',
                     'timestamp': int(time.time()),
                     'added': int(total_added),
-                    'genres': count_frequency(NEW_TRACKS_GENRES),
+                    'genres': playlist_genres,
                     'channel_id': channel_id,
                     'spotify_playlist': pl_id
                 }
             )
-            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now(), count_tracks="%s", last_found_time=now() WHERE spotify_playlist="%s" AND num="%s"',
-                           [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
         else:
             cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now() WHERE spotify_playlist="%s" AND num="%s"',
                            [pl["followers"]["total"], pl_id, num])
-        conn.commit()
+            conn.commit()
 
 
 if __name__ == "__main__":

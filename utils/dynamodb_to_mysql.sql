@@ -16,6 +16,18 @@ create table yt_channels
 alter table yt_channels
     add primary key (id);
 
+create table yt_genres
+(
+    id            int auto_increment
+        primary key,
+    yt_channel_id int         not null,
+    genre_name    varchar(64) not null,
+    count         int         not null,
+    last_updated  datetime    null,
+    constraint yt_genres_yt_channel_id_genre_name_uindex
+        unique (yt_channel_id, genre_name)
+);
+
 create table yt_playlists
 (
     channel_id       varchar(256) not null,
@@ -30,4 +42,3 @@ create table yt_playlists
 
 create index yt_playlists_channel_id_num_index
     on yt_playlists (channel_id, num);
-
