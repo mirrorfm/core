@@ -195,10 +195,8 @@ def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
     cursor.execute('SELECT * FROM yt_channels WHERE channel_id="%s"' % channel_id)
     row = cursor.fetchone()
     if row:
-        thumbnails = json.loads(row['thumbnails'])
-        image_url = thumbnails['medium']['url']
         sp.playlist_upload_cover_image(
-            playlist_id, get_as_base64(image_url))
+            playlist_id, get_as_base64(row['thumbnail_medium']))
 
 
 def get_as_base64(url):
@@ -432,7 +430,7 @@ def handle(event, context):
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM yt_channels WHERE id=1")
                 channel = cursor.fetchone()
-                channel_aid = channel['aid']
+                channel_aid = channel['id']
     else:
         # Rediscover tracks
         channel_to_process = get_current_or_next_channel()

@@ -7,6 +7,9 @@ create table yt_channels
     last_upload_datetime datetime     not null,
     thumbnails           json         not null,
     upload_playlist_id   varchar(256) not null,
+    thumbnail_high       varchar(256) not null,
+    thumbnail_medium     varchar(256) not null,
+    thumbnail_default    varchar(256) not null,
     constraint yt_channels_channel_id_uindex
         unique (channel_id),
     constraint yt_channels_id_uindex
@@ -42,3 +45,4 @@ create table yt_playlists
 
 create index yt_playlists_channel_id_num_index
     on yt_playlists (channel_id, num);
+

@@ -1,6 +1,6 @@
 {
     "description": "From DynamoDB to www (channels endpoint)",
-    "runtime": "python3.7",
+    "runtime": "golang",
     "timeout": 30,
     "memory": 1024,
     "hooks":{

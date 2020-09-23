@@ -21,5 +21,4 @@ This repository contains the code for the main background processes.
  - [`from-github`](functions/from-github/)
  - [`from-youtube`](functions/from-youtube/)
  - [`to-spotify`](functions/to-spotify/)
- - [`to-www-channels`](functions/to-www-channels/)
- - [`to-www-events`](functions/to-www-events/)
+ - [`to-www`](functions/to-www/)

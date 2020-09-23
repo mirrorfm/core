@@ -195,8 +195,13 @@ def handle(event, context):
     print(channel_name)
 
     cur = conn.cursor()
-    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnails = %s WHERE channel_id = %s",
-                [channel_name, upload_playlist_id, json.dumps(thumbnails), channel_id])
+    thumbnails = json.loads(row['thumbnails'])
+    thumbnail_high = thumbnails['high']['url']
+    thumbnail_medium = thumbnails['medium']['url']
+    thumbnail_default = thumbnails['default']['url']
+
+    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s WHERE channel_id = %s",
+                [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default,channel_id])
     conn.commit()
 
     if not last_upload_datetime:
@@ -266,6 +271,8 @@ def handle(event, context):
             )
 
     # Update channel row with last_upload_datetime
+    print("next_last_upload_datetime", next_last_upload_datetime)
+    print("last_upload_datetime", last_upload_datetime)
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
         print(next_last_upload_datetime)
         last_upload_datetime = datetime_to_zulu(next_last_upload_datetime)
