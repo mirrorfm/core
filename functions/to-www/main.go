@@ -21,9 +21,11 @@ import (
 )
 
 type Client struct {
-	DynamoDB      		*dynamodb.DynamoDB
-	DynamoDBEventsTable string
-	SQLDriver			*sql.DB
+	DynamoDB                     *dynamodb.DynamoDB
+	DynamoDBEventsTable          string
+	DynamoDBTracksTable          string
+	DynamoDBDuplicateTracksTable string
+	SQLDriver                    *sql.DB
 }
 
 var ginLambda *ginadapter.GinLambda
@@ -32,6 +34,7 @@ func init() {
 	// stdout and stderr are sent to AWS CloudWatch Logs
 	log.Printf("Gin cold start")
 	r := gin.Default()
+	r.Use(cors)
 
 	// DynamoDB
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
@@ -50,9 +53,11 @@ func init() {
 	sqlDriver, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
 
 	client := Client{
-		DynamoDB:      			dynamoClient,
-		DynamoDBEventsTable: 	"mirrorfm_events",
-		SQLDriver: 	 			sqlDriver,
+		DynamoDB:                     dynamoClient,
+		DynamoDBEventsTable:          "mirrorfm_events",
+		DynamoDBTracksTable:          "mirrorfm_yt_tracks",
+		DynamoDBDuplicateTracksTable: "mirrorfm_yt_duplicates",
+		SQLDriver:                    sqlDriver,
 	}
 
 	if err != nil {
@@ -61,28 +66,61 @@ func init() {
 
 	r.GET("/events", func(c *gin.Context) {
 		events, _ := client.getEvents()
+		if err != nil {
+			apiError(c, err)
+		}
 		c.JSON(200, events)
 	})
 
-	r.GET("/home", func(c *gin.Context) {
-		channels, _ := client.getChannels()
-		c.JSON(200, channels)
-	})
-
-	r.GET("/", func(c *gin.Context) {
+	r.GET("/channels", func(c *gin.Context) {
+		channels, err := client.getYoutubeChannels()
+		if err != nil {
+			apiError(c, err)
+		}
+		total_tracks, err := client.getTableCount(client.DynamoDBTracksTable)
+		if err != nil {
+			apiError(c, err)
+		}
+		found_tracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
+		if err != nil {
+			apiError(c, err)
+		}
 		c.JSON(200, gin.H{
-			"message": "yo",
+			"youtube":        channels,
+			"total_channels": len(channels),
+			"total_tracks":   total_tracks,
+			"found_tracks":   found_tracks,
 		})
 	})
 
-	if true {
+	r.GET("/channels/:id", func(c *gin.Context) {
+		channelId := c.Param("id")
+		channel, err := client.getYoutubeChannel(channelId)
+		if err != nil {
+			apiError(c, err)
+		}
+		c.JSON(200, gin.H{
+			"channel": channel,
+		})
+	})
+
+	r.GET("/", func(c *gin.Context) {
+		channels, err := client.getYoutubeChannels()
+		if err != nil {
+			apiError(c, err)
+		}
+		c.JSON(200, gin.H{
+			"youtube": channels,
+		})
+	})
+
+	if os.Getenv("AWS_EXECUTION_ENV") == "" {
 		fmt.Println("Running in development mode")
-		r.Run()
+		_ = r.Run()
 	} else {
 		fmt.Println("Running in lambda mode")
 		ginLambda = ginadapter.New(r)
 	}
-
 }
 
 func Handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -94,27 +132,46 @@ func main() {
 	lambda.Start(Handler)
 }
 
+func cors(c *gin.Context) {
+	c.Header("Content-Type", "application/json")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Credentials", "true")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+	c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+}
+
+func apiError(c *gin.Context, err error) {
+	c.JSON(500, gin.H{
+		"error": err.Error(),
+	})
+}
+
 type YoutubeChannel struct {
-	Id    				int
-	ChannelId  			string
-	ChannelName 		string
-	CountTracks 		int
-	LastUploadDatetime 	time.Time
-	ThumbnailDefault	string
-	UploadPlaylistId	string
+	Id                 int       `json:"id"`
+	ChannelId          string    `json:"channel_id"`
+	ChannelName        string    `json:"channel_name"`
+	CountTracks        int       `json:"count_tracks"`
+	FoundTracks        int       `json:"found_tracks"`
+	LastUploadDatetime time.Time `json:"last_upload_datetime"`
+	ThumbnailDefault   string    `json:"thumbnail_default"`
+	UploadPlaylistId   string    `json:"upload_playlist_id"`
+	PlaylistId         string    `json:"playlist_id"`
 }
 
 type Event struct {
-	Host 			string
-	Timestamp 		string
-	Added 			string
-	ChannelID 		string `dynamodbav:"channel_id"`
-	SpotifyPlaylist string `dynamodbav:"spotify_playlist"`
+	Host            string `json:"host"`
+	Timestamp       string `json:"timestamp"`
+	Added           string `json:"added"`
+	ChannelID       string `json:"channel_id" dynamodbav:"channel_id"`
+	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
 }
 
-func (c *Client) getChannels() (res []YoutubeChannel, err error) {
-	selDB, err := c.SQLDriver.Query("SELECT id, channel_id, channel_name, count_tracks," +
-		"last_upload_datetime, thumbnail_default, upload_playlist_id FROM yt_channels")
+func (c *Client) getYoutubeChannels() (res []YoutubeChannel, err error) {
+	selDB, err := c.SQLDriver.Query("SELECT c.id, c.channel_id, c.channel_name, c.count_tracks, " +
+		"c.last_upload_datetime, c.thumbnail_default, c.upload_playlist_id, " +
+		"p.spotify_playlist, p.found_tracks " +
+		"FROM yt_channels as c " +
+		"INNER JOIN yt_playlists p on c.channel_id = p.channel_id")
 	if err != nil {
 		return res, err
 	}
@@ -128,14 +185,48 @@ func (c *Client) getChannels() (res []YoutubeChannel, err error) {
 			&ch.CountTracks,
 			&ch.LastUploadDatetime,
 			&ch.ThumbnailDefault,
-			&ch.UploadPlaylistId)
+			&ch.UploadPlaylistId,
+			&ch.PlaylistId,
+			&ch.FoundTracks)
 		if err != nil {
 			return res, err
 		}
 		res = append(res, ch)
 	}
-	defer c.SQLDriver.Close()
 	return res, nil
+}
+
+func (c *Client) getTableCount(table string) (count *int64, err error) {
+	describeTable := &dynamodb.DescribeTableInput{
+		TableName: aws.String(table),
+	}
+	res, err := c.DynamoDB.DescribeTable(describeTable)
+	if err != nil {
+		return nil, err
+	}
+	return res.Table.ItemCount, nil
+}
+
+func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err error) {
+	selDB := c.SQLDriver.QueryRow("SELECT c.id, c.channel_id, c.channel_name, c.count_tracks, "+
+		"c.last_upload_datetime, c.thumbnail_default, c.upload_playlist_id, "+
+		"p.spotify_playlist, p.found_tracks "+
+		"FROM yt_channels as c "+
+		"INNER JOIN yt_playlists p on c.channel_id = p.channel_id "+
+		"WHERE c.channel_id = ?", channelId)
+
+	err = selDB.Scan(
+		&ch.Id,
+		&ch.ChannelId,
+		&ch.ChannelName,
+		&ch.CountTracks,
+		&ch.LastUploadDatetime,
+		&ch.ThumbnailDefault,
+		&ch.UploadPlaylistId,
+		&ch.PlaylistId,
+		&ch.FoundTracks)
+
+	return ch, err
 }
 
 func (c *Client) getEvents() (events []Event, err error) {
@@ -150,9 +241,9 @@ func (c *Client) getEvents() (events []Event, err error) {
 				},
 			},
 		},
-		Limit:      		aws.Int64(40),
-		ScanIndexForward:   aws.Bool(false),
-		TableName:         	aws.String(c.DynamoDBEventsTable),
+		Limit:            aws.Int64(40),
+		ScanIndexForward: aws.Bool(false),
+		TableName:        aws.String(c.DynamoDBEventsTable),
 	}
 
 	result, err := c.DynamoDB.Query(queryInput)

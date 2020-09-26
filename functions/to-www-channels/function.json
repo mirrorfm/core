@@ -1,9 +1,0 @@
-{
-    "description": "From DynamoDB to www (channels endpoint)",
-    "runtime": "golang",
-    "timeout": 30,
-    "memory": 1024,
-    "hooks":{
-        "build": "pip3 install -r requirements.txt -t ./env"
-    }
-}
