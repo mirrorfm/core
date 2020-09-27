@@ -149,6 +149,7 @@ def handle(event, context):
             }
         )
         channel_id = channel['channel_id']
+        print(channel['channel_name'])
         if 'last_upload_datetime' in channel:
             last_upload_datetime = channel['last_upload_datetime']
         if 'count_tracks' in channel:
@@ -183,25 +184,31 @@ def handle(event, context):
                 raise(Exception("Quota exceeded on all developer keys"))
 
     try:
+        pprint(response)
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
         channel_name = response['items'][0]['snippet']['title']
         thumbnails = response['items'][0]['snippet']['thumbnails']
+    except KeyError as e:
+        print(e)
+        return
     except IndexError as e:
+        print(e)
         # Ignore malformatted event / channel_id
         # It's likely the channel has been removed or terminated
-        print(e)
+        cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
+                    [channel_id])
+        conn.commit()
         return
 
     print(channel_name)
 
     cur = conn.cursor()
-    thumbnails = json.loads(row['thumbnails'])
     thumbnail_high = thumbnails['high']['url']
     thumbnail_medium = thumbnails['medium']['url']
     thumbnail_default = thumbnails['default']['url']
 
-    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s WHERE channel_id = %s",
-                [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default,channel_id])
+    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s, terminated_datetime = NULL WHERE channel_id = %s",
+                [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default, channel_id])
     conn.commit()
 
     if not last_upload_datetime:
@@ -271,16 +278,15 @@ def handle(event, context):
             )
 
     # Update channel row with last_upload_datetime
-    print("next_last_upload_datetime", next_last_upload_datetime)
+    print("next_last_upload_datetime", next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'))
     print("last_upload_datetime", last_upload_datetime)
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
-        print(next_last_upload_datetime)
-        last_upload_datetime = datetime_to_zulu(next_last_upload_datetime)
         count_tracks = old_yt_count_tracks + len(new_items_desc)
         cur = conn.cursor()
-        cur.execute('UPDATE yt_channels SET last_upload_datetime="%s", count_tracks="%s" WHERE id="%s"',
-                              [last_upload_datetime, count_tracks, channel_id])
-        conn.commit()
+        cur.execute('UPDATE yt_channels SET last_upload_datetime = %s, count_tracks = %s WHERE channel_id = %s',
+                    [next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'), count_tracks, channel_id])
+        res = conn.commit()
+        print(res)
     else:
         print("No new tracks")
 

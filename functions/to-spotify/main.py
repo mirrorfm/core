@@ -468,7 +468,7 @@ def handle(event, context):
             playlist_genres = count_frequency(new_track_genres)
             pprint(playlist_genres)
 
-            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now(), count_tracks="%s", last_found_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+            cursor.execute('UPDATE yt_playlists SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
                            [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
             for genre in playlist_genres:
                 cursor.execute(
