@@ -16,7 +16,6 @@ import types
 import dateutil.parser
 import boto3
 import pymysql
-import json
 
 import pytz
 utc=pytz.UTC
@@ -83,7 +82,7 @@ def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, l
     next_last_upload_datetime = next_last_upload_datetime.replace(tzinfo=utc)
     item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt']).replace(tzinfo=utc)
     if item_datetime > last_upload_datetime.replace(tzinfo=utc):
-        print(get_video_id(process_full_list, item['contentDetails']) + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
+        # print(get_video_id(process_full_list, item['contentDetails']) + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
         new_items_desc.append(item)
         if item_datetime > next_last_upload_datetime.replace(tzinfo=utc):
             return item_datetime
@@ -117,14 +116,24 @@ def get_next_channel():
     )
 
     cursor = conn.cursor()
-
+    cursor.execute("SELECT * FROM yt_channels ORDER BY id DESC LIMIT 1")
+    last = cursor.fetchone()['id']
     if 'Item' in from_youtube_last_successful_channel and from_youtube_last_successful_channel['Item']['value']:
-        cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" %
-                       str(int(from_youtube_last_successful_channel['Item']['value']) + 1))
-        channel = cursor.fetchone()
-        if channel:
-            return channel
+        id = int(from_youtube_last_successful_channel['Item']['value']) + 1
+        while id <= last:
+            print(id)
+            cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" % str(id))
+            channel = cursor.fetchone()
+            if channel:
+                return channel
+            id += 1
     cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+    return cursor.fetchone()
+
+
+def get_channel(channel_id):
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM yt_channels WHERE channel_id='%s'" % str(channel_id))
     return cursor.fetchone()
 
 
@@ -139,6 +148,7 @@ def handle(event, context):
         # A channel_id was added to the `yt_channels` table
         print(event)
         channel_id = event['Records'][0]['Sns']['Message']
+        channel = get_channel(channel_id)
     else:
         # The lambda was triggered by CRON
         channel = get_next_channel()
@@ -154,7 +164,7 @@ def handle(event, context):
             last_upload_datetime = channel['last_upload_datetime']
         if 'count_tracks' in channel:
             old_yt_count_tracks = channel['count_tracks']
-
+    print(channel)
     print(last_upload_datetime)
     print(upload_playlist_id)
     print(old_yt_count_tracks)
@@ -183,26 +193,25 @@ def handle(event, context):
             if i == len(keys) - 1:
                 raise(Exception("Quota exceeded on all developer keys"))
 
+    cur = conn.cursor()
     try:
-        pprint(response)
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
         channel_name = response['items'][0]['snippet']['title']
         thumbnails = response['items'][0]['snippet']['thumbnails']
-    except KeyError as e:
-        print(e)
-        return
-    except IndexError as e:
-        print(e)
+    except (KeyError, IndexError) as e:
         # Ignore malformatted event / channel_id
         # It's likely the channel has been removed or terminated
-        cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
-                    [channel_id])
-        conn.commit()
+        if not channel['terminated_datetime']:
+            cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
+                        [channel_id])
+            conn.commit()
+            print("Set channel as terminated")
+        else:
+            print("Channel already terminated")
         return
 
     print(channel_name)
 
-    cur = conn.cursor()
     thumbnail_high = thumbnails['high']['url']
     thumbnail_medium = thumbnails['medium']['url']
     thumbnail_default = thumbnails['default']['url']
@@ -211,8 +220,9 @@ def handle(event, context):
                 [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default, channel_id])
     conn.commit()
 
-    if not last_upload_datetime:
+    if not last_upload_datetime or type(last_upload_datetime) == str:
         process_full_list = True
+        old_yt_count_tracks = 0
         last_upload_datetime = datetime.min.replace(tzinfo=timezone.utc)
     else:
         process_full_list = False
@@ -280,6 +290,7 @@ def handle(event, context):
     # Update channel row with last_upload_datetime
     print("next_last_upload_datetime", next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'))
     print("last_upload_datetime", last_upload_datetime)
+
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
         count_tracks = old_yt_count_tracks + len(new_items_desc)
         cur = conn.cursor()
