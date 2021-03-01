@@ -65,7 +65,7 @@ func init() {
 	}
 
 	r.GET("/events", func(c *gin.Context) {
-		events, _ := client.getEvents(6)
+		events, _ := client.getEvents(100)
 		handleAPIError(c, err)
 
 		c.JSON(200, events)
@@ -98,7 +98,7 @@ func init() {
 
 	r.GET("/home", func(c *gin.Context) {
 		var limitChannels = 6
-		var limitGenres = 4
+		var limitGenres = 20
 
 		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", limitChannels, limitGenres)
 		handleAPIError(c, err)
@@ -108,12 +108,18 @@ func init() {
 		handleAPIError(c, err)
 		recentlyAdded, err := client.getYoutubeChannels("id", "DESC", limitChannels, limitGenres)
 		handleAPIError(c, err)
+		lastTerminated, err := client.getYoutubeChannelsTerminated("terminated_datetime", "DESC", limitChannels, limitGenres)
+		handleAPIError(c, err)
+		rarestUploads, err := client.getYoutubeChannels("(found_tracks*100/count_tracks)", "DESC", limitChannels, limitGenres)
+		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{
-			"lastUpdated": lastUpdated,
-			"mostFollowed": mostFollowed,
-			"mostUploads": mostUploads,
-			"recentlyAdded": recentlyAdded,
+			"lastUpdated":    lastUpdated,
+			"mostFollowed":   mostFollowed,
+			"mostUploads":    mostUploads,
+			"recentlyAdded":  recentlyAdded,
+			"lastTerminated": lastTerminated,
+			"rarestUploads":  rarestUploads,
 		})
 	})
 
@@ -153,7 +159,7 @@ func handleAPIError(c *gin.Context, err error) {
 
 type Genre struct {
 	Name  string `json:"name" dynamodbav:"genre_name"`
-	Count int `json:"count"`
+	Count int    `json:"count"`
 }
 
 type YoutubeChannel struct {
@@ -163,28 +169,31 @@ type YoutubeChannel struct {
 	CountTracks        int       `json:"count_tracks"`
 	FoundTracks        int       `json:"found_tracks"`
 	LastUploadDatetime time.Time `json:"last_upload_datetime"`
-	ThumbnailDefault   string    `json:"thumbnail_default"`
+	ThumbnailMedium    string    `json:"thumbnail_medium"`
 	UploadPlaylistId   string    `json:"upload_playlist_id"`
+	TerminatedDatetime sql.NullTime `json:"terminated_datetime"`
+	AddedDatetime 	   sql.NullTime `json:"added_datetime"`
 	PlaylistId         string    `json:"playlist_id"`
 	CountFollowers     int       `json:"count_followers"`
 	Genres             []Genre   `json:"genres"`
-	LastFoundTime	   time.Time `json:"last_found_time"`
+	LastFoundTime      time.Time `json:"last_found_time"`
 }
 
 type Event struct {
-	Host            string 			`json:"host"`
-	Timestamp       string 			`json:"timestamp"`
-	Added           string 			`json:"added"`
-	ChannelID       string 			`json:"channel_id" dynamodbav:"channel_id"`
-	SpotifyPlaylist string 			`json:"spotify_playlist" dynamodbav:"spotify_playlist"`
-	Channel         YoutubeChannel 	`json:"channel,omitempty"`
+	Host            string `json:"host"`
+	Timestamp       string `json:"timestamp"`
+	Added           string `json:"added"`
+	ChannelID       string `json:"channel_id" dynamodbav:"channel_id"`
+	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
+	ChannelName     string `json:"channel_name" dynamodbav:"channel_name"`
 }
 
 func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
 	query := fmt.Sprintf(`
 		SELECT
 			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
-			c.last_upload_datetime, c.thumbnail_default, c.upload_playlist_id,
+			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
+			c.terminated_datetime, c.added_datetime,
 			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
 			p.last_found_time as last_found_time
 		FROM
@@ -206,8 +215,59 @@ func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres in
 			&ch.ChannelName,
 			&ch.CountTracks,
 			&ch.LastUploadDatetime,
-			&ch.ThumbnailDefault,
+			&ch.ThumbnailMedium,
 			&ch.UploadPlaylistId,
+			&ch.TerminatedDatetime,
+			&ch.AddedDatetime,
+			&ch.PlaylistId,
+			&ch.FoundTracks,
+			&ch.CountFollowers,
+			&ch.LastFoundTime)
+		if err != nil {
+			return res, err
+		}
+		ch, err := c.populateWithGenres(ch, limitGenres)
+		if err != nil {
+			return res, err
+		}
+		res = append(res, ch)
+	}
+	return res, nil
+}
+
+func (c *Client) getYoutubeChannelsTerminated(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
+	query := fmt.Sprintf(`
+		SELECT
+			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
+			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
+			c.terminated_datetime, c.added_datetime,
+			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
+			p.last_found_time as last_found_time
+		FROM
+			yt_channels as c
+		INNER JOIN
+			yt_playlists p on c.channel_id = p.channel_id
+		WHERE
+			terminated_datetime IS NOT NULL
+		GROUP BY id ORDER BY %s %s LIMIT ?`, orderBy, order)
+	selDB, err := c.SQLDriver.Query(query, limit)
+	if err != nil {
+		fmt.Println(err.Error())
+		return res, err
+	}
+
+	var ch YoutubeChannel
+	for selDB.Next() {
+		err = selDB.Scan(
+			&ch.ID,
+			&ch.ChannelId,
+			&ch.ChannelName,
+			&ch.CountTracks,
+			&ch.LastUploadDatetime,
+			&ch.ThumbnailMedium,
+			&ch.UploadPlaylistId,
+			&ch.TerminatedDatetime,
+			&ch.AddedDatetime,
 			&ch.PlaylistId,
 			&ch.FoundTracks,
 			&ch.CountFollowers,
@@ -225,12 +285,12 @@ func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres in
 }
 
 func (c *Client) populateWithGenres(channel YoutubeChannel, limitGenres int) (YoutubeChannel, error) {
-	query := `
+	query := fmt.Sprintf(`
 		SELECT genre_name, count
 		FROM yt_genres
 		WHERE yt_channel_id = ?
 		ORDER BY count DESC
-		LIMIT ?`
+		LIMIT ?`)
 	db, err := c.SQLDriver.Query(query, &channel.ID, limitGenres)
 	if err != nil {
 		fmt.Println(err.Error())
@@ -261,13 +321,14 @@ func (c *Client) getTableCount(table string) (count *int64, err error) {
 }
 
 func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err error) {
-	selDB := c.SQLDriver.QueryRow(`
+	selDB := c.SQLDriver.QueryRow(fmt.Sprintf(`
 		SELECT
 		    c.id, c.channel_id, c.channel_name, c.count_tracks, c.last_upload_datetime,
-		    c.thumbnail_default, c.upload_playlist_id, p.spotify_playlist, p.found_tracks
+		    c.thumbnail_medium, c.upload_playlist_id, c.terminated_datetime, c.added_datetime,
+		    p.spotify_playlist, p.found_tracks
 		FROM yt_channels as c
 		INNER JOIN yt_playlists p on c.channel_id = p.channel_id
-		WHERE c.channel_id = ?`, channelId)
+		WHERE c.channel_id = ?`), channelId)
 
 	err = selDB.Scan(
 		&ch.ID,
@@ -275,8 +336,10 @@ func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err err
 		&ch.ChannelName,
 		&ch.CountTracks,
 		&ch.LastUploadDatetime,
-		&ch.ThumbnailDefault,
+		&ch.ThumbnailMedium,
 		&ch.UploadPlaylistId,
+		&ch.TerminatedDatetime,
+		&ch.AddedDatetime,
 		&ch.PlaylistId,
 		&ch.FoundTracks)
 
