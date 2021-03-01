@@ -110,7 +110,7 @@ func init() {
 		handleAPIError(c, err)
 		lastTerminated, err := client.getYoutubeChannelsTerminated("terminated_datetime", "DESC", limitChannels, limitGenres)
 		handleAPIError(c, err)
-		rarestUploads, err := client.getYoutubeChannels("(found_tracks*100/count_tracks)", "DESC", limitChannels, limitGenres)
+		rarestUploads, err := client.getYoutubeChannels("(found_tracks*100/count_tracks)", "ASC", limitChannels, limitGenres)
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{

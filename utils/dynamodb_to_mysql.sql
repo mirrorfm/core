@@ -10,6 +10,8 @@ create table yt_channels
     thumbnail_high       varchar(256) not null,
     thumbnail_medium     varchar(256) not null,
     thumbnail_default    varchar(256) not null,
+    terminated_datetime  datetime     null,
+    added_datetime       datetime     null,
     constraint yt_channels_channel_id_uindex
         unique (channel_id),
     constraint yt_channels_id_uindex
@@ -36,7 +38,7 @@ create table yt_playlists
     channel_id       varchar(256) not null,
     num              int          not null,
     count_followers  int          not null,
-    count_tracks     int          not null,
+    found_tracks     int          not null,
     last_found_time  datetime     not null,
     last_search_time datetime     not null,
     spotify_playlist varchar(255) not null,
