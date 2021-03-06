@@ -84,7 +84,8 @@ def handle(event, context):
 
         try:
             cur = conn.cursor()
-            cur.execute('insert into yt_channels (channel_id) values(%s)', [channel_id])
+            cur.execute('insert into yt_channels (channel_id, channel_name, added_datetime) values(%s, %s, NOW())',
+                        [channel_id, channel_name])
             conn.commit()
             print('Added', channel_name)
             response = sns.publish(

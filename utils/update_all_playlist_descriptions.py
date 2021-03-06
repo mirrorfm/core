@@ -36,7 +36,7 @@ for p in playlists['Items']:
     genres_str = ''
     if len(top3_genres) > 0:
         genres_str = ' with ' + ', '.join(top3_genres)
-    desc = "YouTube channel" + genres_str + ". Add your own on www.mirror.fm #mirrorfm"
+    desc = "YouTube channel" + genres_str + ". Add your own channel on www.mirror.fm #mirrorfm"
 
     # Update
     print(p.get('spotify_playlist'))

@@ -28,6 +28,13 @@ type Client struct {
 	SQLDriver                    *sql.DB
 }
 
+const (
+	youtubeChannelsLimit = 500
+	youtubeChannelsGenreLimit = 4
+	homeChannelsLimit = 6
+	homeChannelsGenreLimit = 20
+)
+
 var ginLambda *ginadapter.GinLambda
 
 func init() {
@@ -76,7 +83,7 @@ func init() {
 		handleAPIError(c, err)
 		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
 		handleAPIError(c, err)
-		channels, err := client.getYoutubeChannels("c.id", "ASC", 500, 4)
+		channels, err := client.getYoutubeChannels("c.id", "ASC", youtubeChannelsLimit, youtubeChannelsGenreLimit)
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{
@@ -97,20 +104,17 @@ func init() {
 	})
 
 	r.GET("/home", func(c *gin.Context) {
-		var limitChannels = 6
-		var limitGenres = 20
-
-		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", limitChannels, limitGenres)
+		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
-		mostFollowed, err := client.getYoutubeChannels("count_followers", "DESC", limitChannels, limitGenres)
+		mostFollowed, err := client.getYoutubeChannels("count_followers", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
-		mostUploads, err := client.getYoutubeChannels("count_tracks", "DESC", limitChannels, limitGenres)
+		mostUploads, err := client.getYoutubeChannels("count_tracks", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
-		recentlyAdded, err := client.getYoutubeChannels("id", "DESC", limitChannels, limitGenres)
+		recentlyAdded, err := client.getYoutubeChannels("id", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
-		lastTerminated, err := client.getYoutubeChannelsTerminated("terminated_datetime", "DESC", limitChannels, limitGenres)
+		lastTerminated, err := client.getYoutubeChannelsTerminated("terminated_datetime", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
-		rarestUploads, err := client.getYoutubeChannels("(found_tracks*100/count_tracks)", "ASC", limitChannels, limitGenres)
+		rarestUploads, err := client.getYoutubeChannels("(found_tracks*100/count_tracks)", "ASC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{

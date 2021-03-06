@@ -115,19 +115,13 @@ def get_next_channel():
         ]
     )
 
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_channels ORDER BY id DESC LIMIT 1")
-    last = cursor.fetchone()['id']
     if 'Item' in from_youtube_last_successful_channel and from_youtube_last_successful_channel['Item']['value']:
-        id = int(from_youtube_last_successful_channel['Item']['value']) + 1
-        while id <= last:
-            print(id)
-            cursor.execute("SELECT * FROM yt_channels WHERE id=%s LIMIT 1" % str(id))
-            channel = cursor.fetchone()
-            if channel:
-                return channel
-            id += 1
-    cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+        last_channel_id = int(from_youtube_last_successful_channel['Item']['value'])
+    else:
+        last_channel_id = 1
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_channel_id))
     return cursor.fetchone()
 
 

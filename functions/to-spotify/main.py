@@ -168,7 +168,7 @@ def get_spotify():
 def find_on_spotify(sp, track_name):
     artist_and_track = split_artist_track(track_name)
     if artist_and_track is not None and len(artist_and_track) > 1:
-        query = 'track:"{0[1]}"+artist:"{0[0]}"'.format(artist_and_track)
+        query = 'track:"{0[1]}"+artist:"{0[0][0]}"'.format(artist_and_track)
     else:
         print("[?]", track_name)
         query = track_name
@@ -222,6 +222,7 @@ def create_playlist_for_channel(sp, channel_id, num=1):
     cur = conn.cursor()
     cur.execute('insert into yt_playlists (channel_id, num, spotify_playlist) values(%s, %s, %s)',
                 [channel_id, num, playlist_id])
+    conn.commit()
     try:
         add_channel_cover_to_playlist(sp, channel_id, playlist_id)
     except Exception as e:
@@ -352,16 +353,15 @@ def spotify_lookup(sp, record, new_track_genres):
         return True
 
 
-def get_current_or_next_channel():
-    last_successful_entry = get_cursor('to_spotify_last_successful_channel')
+def get_next_channel():
+    to_spotify_last_successful_channel = get_cursor('to_spotify_last_successful_channel')
+    if 'Item' in to_spotify_last_successful_channel and to_spotify_last_successful_channel['Item']['value']:
+        last_channel_id = int(to_spotify_last_successful_channel['Item']['value'])
+    else:
+        last_channel_id = 1
+
     cursor = conn.cursor()
-    if 'Item' in last_successful_entry and last_successful_entry['Item']['value']:
-        cursor.execute("SELECT * FROM yt_channels WHERE id=%s" %
-                       str(int(last_successful_entry['Item']['value']) + 1))
-        channel = cursor.fetchone()
-        if channel:
-            return channel
-    cursor.execute("SELECT * FROM yt_channels WHERE id=1")
+    cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_channel_id))
     return cursor.fetchone()
 
 
@@ -410,36 +410,49 @@ def deserialize_record(record):
     return d
 
 
+def update_playlist_description(sp, pl_id, channel_aid):
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM yt_genres WHERE yt_channel_id=%s ORDER BY count DESC LIMIT 6", channel_aid)
+    genres = cursor.fetchall()
+    genre_names = [g["genre_name"] for g in genres]
+
+    # Description
+    genres_str = ''
+    if len(genre_names) > 0:
+        genres_str = ' with ' + ', '.join(genre_names)
+    desc = "YouTube channel" + genres_str + ". Add any youtube channel on www.mirror.fm #mirrorfm"
+    sp.playlist_change_details(pl_id, description=desc)
+
+
 def handle(event, context):
     new_track_genres = []
 
     sp = get_spotify()
     total_added = total_searched = 0
 
-    if 'Records' in event:
+    if 'Records' in event and len(event['Records']) > 0:
         # New tracks
-        print("Process %d tracks just added to DynamoDB" %
-              len(event['Records']))
+        print("Process %d tracks just added to DynamoDB" % len(event['Records']))
         for record in event['Records']:
             record = record['dynamodb']
             if 'NewImage' in record and 'spotify_uri' not in record['NewImage']:
                 total_searched += 1
                 if spotify_lookup(sp, deserialize_record(record), new_track_genres):
                     total_added += 1
-                channel_id = record['NewImage']['yt_channel_id']['S']
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM yt_channels WHERE id=1")
-                channel = cursor.fetchone()
-                channel_aid = channel['id']
+        channel_id = event['Records'][0]['NewImage']['yt_channel_id']['S']
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM yt_channels WHERE channel_id=%s", channel_id)
+        channel = cursor.fetchone()
+        channel_aid = channel['id']
+        channel_name = channel['channel_name']
     else:
         # Rediscover tracks
-        channel_to_process = get_current_or_next_channel()
+        channel_to_process = get_next_channel()
         channel_aid = channel_to_process['id']
         channel_id = channel_to_process['channel_id']
-        print(channel_id)
+
         # Channel might not have a name yet if it has just been added
         channel_name = channel_to_process['channel_name']
-
         print("Rediscovering channel", channel_name or channel_id)
 
         tracks_to_process = get_next_tracks(channel_id)
@@ -455,19 +468,20 @@ def handle(event, context):
         print(
             "Searched %s, found %s track(s), updating channel info for %s" %
             (total_searched, total_added, channel_id))
+
+        # TODO What if the code above updated 2 playlists?
         pl_item, num = get_last_playlist_for_channel(channel_id)
         if not pl_item:
             return
 
         pl_id = pl_item['spotify_playlist']
+        update_playlist_description(sp, pl_id, channel_aid)
         pl = sp.playlist(pl_id)
 
         cursor = conn.cursor()
 
         if total_added > 0:
             playlist_genres = count_frequency(new_track_genres)
-            pprint(playlist_genres)
-
             cursor.execute('UPDATE yt_playlists SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
                            [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
             for genre in playlist_genres:
@@ -483,7 +497,8 @@ def handle(event, context):
                     'added': int(total_added),
                     'genres': playlist_genres,
                     'channel_id': channel_id,
-                    'spotify_playlist': pl_id
+                    'spotify_playlist': pl_id,
+                    'channel_name': channel_name
                 }
             )
         else:
