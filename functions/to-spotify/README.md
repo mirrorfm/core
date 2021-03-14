@@ -30,8 +30,3 @@ Fill in `./functions/to-spotify/env.json` with `SPOTIPY_CLIENT_ID` and `SPOTIPY_
 ### AWS prerequisites
 
  - All from λ1
- - DynamoDB tables:
-    - PlaylistsTable
-        - name: `mirrorfm_yt_playlists`
-        - partition key: `yt_channel_id` (string)
-        - sort_key: `num` (decimal)
