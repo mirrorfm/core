@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/cenkalti/backoff/v4"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/irlndts/go-discogs"
@@ -14,14 +16,16 @@ import (
 )
 
 type retryableDiscogsClient struct {
-	discogs.Discogs
+	Discogs                       discogs.Discogs
+	DynamoDB                      *dynamodb.DynamoDB
+	DynamoDBTracksTable           string
 	backoff                       backoff.BackOff
 	highestReleaseID              int
 	uniqueMasterReleases          []int
 	uniqueMasterReleasesExistence map[int][]discogs.Track
 }
 
-func init() {
+func getApp() (retryableDiscogsClient, error) {
 	// MySQL
 	dbHost := os.Getenv("DB_HOST")
 	dbUser := os.Getenv("DB_USERNAME")
@@ -29,60 +33,80 @@ func init() {
 	dbName := os.Getenv("DB_NAME")
 
 	_, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
-
 	if err != nil {
-		panic(err.Error())
+		return retryableDiscogsClient{}, err
 	}
+
+	// DynamoDB
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	dynamoClient := dynamodb.New(sess, &aws.Config{
+		Region: aws.String("eu-west-1"),
+	})
+
 	discogsClient, err := discogs.New(&discogs.Options{
 		UserAgent: "Some Name",
 	})
-	client := retryableDiscogsClient{
+
+	return retryableDiscogsClient{
 		discogsClient,
+		dynamoClient,
+		"mirrorfm_dg_tracks",
 		backoff.WithMaxRetries(backoff.NewExponentialBackOff(),	100),
-		12893584,
+		12893584, // TODO get from DB
 		nil,
 		map[int][]discogs.Track{},
-	}
+	}, nil
+}
+
+func Handler(ctx context.Context) error {
+	client, err := getApp()
 	if err != nil {
-		panic(err.Error())
+		return err
 	}
-	var releases *discogs.LabelReleases
 
 	// TODO Insert in Label table
-
 	maxPages := 1
 	page := 1
+	label := 77423
 
 	for page <= maxPages {
-		if releases, err = client.GetLabelReleases(page); err != nil {
-			panic(err.Error())
+		releases, err := client.GetLabelReleases(page, label)
+		if err != nil {
+			return err
 		}
 		maxPages = releases.Pagination.Pages
 		log.Printf("Page %d/%d\n", page, maxPages)
 		page += 1
 
-		err := client.populateUniqueMasterReleases(releases)
+		err = client.populateUniqueMasterReleases(releases)
 		if err != nil {
-			panic(err.Error())
+			return err
 		}
 	}
 
 	for _, release := range client.uniqueMasterReleases {
 		// TODO ignore if release already in DB
 		fmt.Printf("tracks in %d %d\n", release, len(client.uniqueMasterReleasesExistence[release]))
-		// TODO send tracks to SNS
-		// TODO insert in DB
+		err := client.addTracks(client.uniqueMasterReleasesExistence[release], release, label)
+		if err != nil {
+			return err
+		}
 	}
+
+	// TODO set new highest release ID
+	return nil
 }
 
-func (r *retryableDiscogsClient) populateUniqueMasterReleases(releases *discogs.LabelReleases) error {
+func (client *retryableDiscogsClient) populateUniqueMasterReleases(releases *discogs.LabelReleases) error {
 	for _, release := range releases.Releases {
 		id := release.ID
-		if id <= r.highestReleaseID {
+		if id <= client.highestReleaseID {
 			continue
 		}
 
-		resp, err := r.GetRelease(id)
+		resp, err := client.GetRelease(id)
 		if err != nil {
 			return err
 		}
@@ -92,54 +116,22 @@ func (r *retryableDiscogsClient) populateUniqueMasterReleases(releases *discogs.
 			masterID = release.ID
 		}
 
-		if _, ok := r.uniqueMasterReleasesExistence[masterID]; !ok {
-			r.uniqueMasterReleases = append(r.uniqueMasterReleases, masterID)
-			r.uniqueMasterReleasesExistence[masterID] = resp.Tracklist
+		if _, ok := client.uniqueMasterReleasesExistence[masterID]; !ok {
+			client.uniqueMasterReleases = append(client.uniqueMasterReleases, masterID)
+			client.uniqueMasterReleasesExistence[masterID] = resp.Tracklist
 			log.Printf("%d => %d\n", id, masterID)
 		}
 	}
 	return nil
 }
 
-func (r *retryableDiscogsClient) GetRelease(id int) (resp *discogs.Release, err error) {
-	err = backoff.Retry(func() error {
-		resp, err = r.Discogs.Release(id)
-		if err != nil {
-			return err
-		}
-		// Success, don't retry
-		return nil
-	}, r.backoff)
-	r.backoff.Reset()
-	return
-}
-
-func (r *retryableDiscogsClient) GetLabelReleases(page int) (resp *discogs.LabelReleases, err error) {
-	err = backoff.Retry(func() error {
-		resp, err = r.Discogs.LabelReleases(77423, &discogs.Pagination{
-			Sort: "year",
-			SortOrder: "desc",
-			PerPage: 100,
-			Page: page,
-		})
-		if err != nil {
-			return err
-		}
-		// Success, don't retry
-		return nil
-	}, r.backoff)
-	r.backoff.Reset()
-	return
-}
-
-func Handler(ctx context.Context, snsEvent events.SNSEvent) {
-	for _, record := range snsEvent.Records {
-		snsRecord := record.SNS
-
-		fmt.Printf("[%s %s] Message = %s \n", record.EventSource, snsRecord.Timestamp, snsRecord.Message)
-	}
-}
-
 func main() {
-	lambda.Start(Handler)
+	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
+		lambda.Start(Handler)
+	} else {
+		err := Handler(context.TODO())
+		if err != nil {
+			panic(err.Error())
+		}
+	}
 }
