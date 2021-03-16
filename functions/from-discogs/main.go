@@ -13,16 +13,20 @@ import (
 	"github.com/irlndts/go-discogs"
 	"log"
 	"os"
+	"time"
 )
 
 type retryableDiscogsClient struct {
 	Discogs                       discogs.Discogs
 	DynamoDB                      *dynamodb.DynamoDB
 	DynamoDBTracksTable           string
+	SQLDriver					  *sql.DB
 	backoff                       backoff.BackOff
 	highestReleaseID              int
 	uniqueMasterReleases          []int
-	uniqueMasterReleasesExistence map[int][]discogs.Track
+	uniqueMasterReleasesExistence map[int]discogs.Release
+	labelReleases                 int
+	labelTracks                   int
 }
 
 func getApp() (retryableDiscogsClient, error) {
@@ -32,7 +36,7 @@ func getApp() (retryableDiscogsClient, error) {
 	dbPass := os.Getenv("DB_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
 
-	_, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
+	sqlDriver, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
 	if err != nil {
 		return retryableDiscogsClient{}, err
 	}
@@ -46,18 +50,27 @@ func getApp() (retryableDiscogsClient, error) {
 	})
 
 	discogsClient, err := discogs.New(&discogs.Options{
-		UserAgent: "Some Name",
+		UserAgent: "Mirror.FM",
 	})
+	if err != nil {
+		return retryableDiscogsClient{}, err
+	}
 
 	return retryableDiscogsClient{
-		discogsClient,
-		dynamoClient,
-		"mirrorfm_dg_tracks",
-		backoff.WithMaxRetries(backoff.NewExponentialBackOff(),	100),
-		12893584, // TODO get from DB
-		nil,
-		map[int][]discogs.Track{},
+		Discogs: discogsClient,
+		DynamoDB: dynamoClient,
+		DynamoDBTracksTable: "mirrorfm_dg_tracks",
+		SQLDriver: sqlDriver,
+		backoff: backoff.WithMaxRetries(backoff.NewExponentialBackOff(),100),
+		uniqueMasterReleases: nil,
+		uniqueMasterReleasesExistence: map[int]discogs.Release{},
 	}, nil
+}
+
+type Label struct {
+	HighestReleaseID int `json:"highest_dg_release"`
+	LabelReleases    int `json:"label_releases"`
+	LabelTracks      int `json:"label_tracks"`
 }
 
 func Handler(ctx context.Context) error {
@@ -66,13 +79,50 @@ func Handler(ctx context.Context) error {
 		return err
 	}
 
-	// TODO Insert in Label table
+	labelId := 77423
+
+	label, err := client.GetLabel(labelId)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%+v\n", label)
+	_, err = client.SQLDriver.Exec(fmt.Sprintf(`
+		UPDATE dg_labels
+		SET
+			label_name = ?,
+			added_datetime = ?
+		WHERE label_id = ?
+	`), label.Name, time.Now(), label.ID)
+	if err != nil {
+		return err
+	}
+
+	l := Label{}
+	selDB := client.SQLDriver.QueryRow(fmt.Sprintf(`
+		SELECT
+			highest_dg_release,
+			label_releases,
+			label_tracks
+		FROM dg_labels
+		WHERE label_id = ?
+	`), label.ID)
+	err = selDB.Scan(
+		&l.HighestReleaseID,
+		&l.LabelReleases,
+		&l.LabelTracks,
+	)
+	if err != nil {
+		return err
+	}
+	client.highestReleaseID = l.HighestReleaseID
+	client.labelReleases = l.LabelReleases
+	client.labelTracks = l.LabelTracks
+
 	maxPages := 1
 	page := 1
-	label := 77423
-
 	for page <= maxPages {
-		releases, err := client.GetLabelReleases(page, label)
+		releases, err := client.GetLabelReleases(page, labelId)
 		if err != nil {
 			return err
 		}
@@ -86,16 +136,38 @@ func Handler(ctx context.Context) error {
 		}
 	}
 
-	for _, release := range client.uniqueMasterReleases {
-		// TODO ignore if release already in DB
-		fmt.Printf("tracks in %d %d\n", release, len(client.uniqueMasterReleasesExistence[release]))
-		err := client.addTracks(client.uniqueMasterReleasesExistence[release], release, label)
+	for _, masterReleaseId := range client.uniqueMasterReleases {
+		alreadyStored, err := client.masterReleaseAlreadyStored(labelId, masterReleaseId)
 		if err != nil {
 			return err
 		}
+		if alreadyStored {
+			fmt.Println("Already stored")
+			continue
+		}
+
+		fmt.Printf("tracks in %d %d\n", masterReleaseId, len(client.uniqueMasterReleasesExistence[masterReleaseId].Tracklist))
+		err = client.addTracks(client.uniqueMasterReleasesExistence[masterReleaseId], masterReleaseId, labelId)
+		if err != nil {
+			return err
+		}
+
+		client.labelReleases += 1
+		client.labelTracks += len(client.uniqueMasterReleasesExistence[masterReleaseId].Tracklist)
 	}
 
-	// TODO set new highest release ID
+	_, err = client.SQLDriver.Exec(fmt.Sprintf(`
+		UPDATE dg_labels
+		SET
+			highest_dg_release = ?,
+			label_releases = ?,
+			label_tracks = ?
+		WHERE label_id = ?;
+	`), client.highestReleaseID, client.labelReleases, client.labelTracks, label.ID)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -105,6 +177,7 @@ func (client *retryableDiscogsClient) populateUniqueMasterReleases(releases *dis
 		if id <= client.highestReleaseID {
 			continue
 		}
+		client.highestReleaseID = id
 
 		resp, err := client.GetRelease(id)
 		if err != nil {
@@ -118,7 +191,7 @@ func (client *retryableDiscogsClient) populateUniqueMasterReleases(releases *dis
 
 		if _, ok := client.uniqueMasterReleasesExistence[masterID]; !ok {
 			client.uniqueMasterReleases = append(client.uniqueMasterReleases, masterID)
-			client.uniqueMasterReleasesExistence[masterID] = resp.Tracklist
+			client.uniqueMasterReleasesExistence[masterID] = *resp
 			log.Printf("%d => %d\n", id, masterID)
 		}
 	}

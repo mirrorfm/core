@@ -11,7 +11,6 @@ func (client *retryableDiscogsClient) GetRelease(id int) (resp *discogs.Release,
 		if err != nil {
 			return err
 		}
-		// Success, don't retry
 		return nil
 	}, client.backoff)
 	client.backoff.Reset()
@@ -22,14 +21,25 @@ func (client *retryableDiscogsClient) GetLabelReleases(page, label int) (resp *d
 	err = backoff.Retry(func() error {
 		resp, err = client.Discogs.LabelReleases(label, &discogs.Pagination{
 			Sort: "year",
-			SortOrder: "desc",
+			SortOrder: "asc",
 			PerPage: 100,
 			Page: page,
 		})
 		if err != nil {
 			return err
 		}
-		// Success, don't retry
+		return nil
+	}, client.backoff)
+	client.backoff.Reset()
+	return
+}
+
+func (client *retryableDiscogsClient) GetLabel(label int) (resp *discogs.Label, err error) {
+	err = backoff.Retry(func() error {
+		resp, err = client.Discogs.Label(label)
+		if err != nil {
+			return err
+		}
 		return nil
 	}, client.backoff)
 	client.backoff.Reset()
