@@ -1,0 +1,8 @@
+{
+    "description": "Fetch discogs labels",
+    "runtime": "golang",
+    "timeout": 900,
+    "hooks":{
+        "build": "go get -v -t -d ./... && GOOS=linux GOARCH=amd64 go build -o main main.go"
+    }
+}
