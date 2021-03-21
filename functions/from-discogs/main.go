@@ -11,25 +11,31 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/irlndts/go-discogs"
+	"github.com/pkg/errors"
 	"log"
 	"os"
-	"time"
 )
 
-type retryableDiscogsClient struct {
-	Discogs                       discogs.Discogs
-	DynamoDB                      *dynamodb.DynamoDB
-	DynamoDBTracksTable           string
-	SQLDriver					  *sql.DB
-	backoff                       backoff.BackOff
-	highestReleaseID              int
-	uniqueMasterReleases          []int
-	uniqueMasterReleasesExistence map[int]discogs.Release
-	labelReleases                 int
-	labelTracks                   int
+type App struct {
+	Discogs             discogs.Discogs
+	DynamoDB            *dynamodb.DynamoDB
+	DynamoDBTracksTable string
+	SQLDriver           *sql.DB
+	Backoff             backoff.BackOff
 }
 
-func getApp() (retryableDiscogsClient, error) {
+type LocalLabel struct {
+	ID                  int
+	HighestReleaseID    int `json:"highest_dg_release"`
+	LabelReleases       int `json:"label_releases"`
+	LabelTracks         int `json:"label_tracks"`
+	MasterReleasesCache map[int]discogs.Release
+	LastPage            int `json:"last_page"`
+	DidInit             sql.NullBool `json:"did_init"`
+	MaxPages            int
+}
+
+func getApp() (App, error) {
 	// MySQL
 	dbHost := os.Getenv("DB_HOST")
 	dbUser := os.Getenv("DB_USERNAME")
@@ -38,7 +44,7 @@ func getApp() (retryableDiscogsClient, error) {
 
 	sqlDriver, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
 	if err != nil {
-		return retryableDiscogsClient{}, err
+		return App{}, errors.Wrap(err, "failed to set up DB client")
 	}
 
 	// DynamoDB
@@ -49,153 +55,147 @@ func getApp() (retryableDiscogsClient, error) {
 		Region: aws.String("eu-west-1"),
 	})
 
+	// Discogs
 	discogsClient, err := discogs.New(&discogs.Options{
 		UserAgent: "Mirror.FM",
 	})
 	if err != nil {
-		return retryableDiscogsClient{}, err
+		return App{}, errors.Wrap(err, "failed to set up discogs client")
 	}
 
-	return retryableDiscogsClient{
-		Discogs: discogsClient,
-		DynamoDB: dynamoClient,
+	return App{
+		Discogs:             discogsClient,
+		DynamoDB:            dynamoClient,
 		DynamoDBTracksTable: "mirrorfm_dg_tracks",
-		SQLDriver: sqlDriver,
-		backoff: backoff.WithMaxRetries(backoff.NewExponentialBackOff(),100),
-		uniqueMasterReleases: nil,
-		uniqueMasterReleasesExistence: map[int]discogs.Release{},
+		SQLDriver:           sqlDriver,
+		Backoff:             backoff.WithMaxRetries(backoff.NewExponentialBackOff(),100),
 	}, nil
 }
 
-type Label struct {
-	HighestReleaseID int `json:"highest_dg_release"`
-	LabelReleases    int `json:"label_releases"`
-	LabelTracks      int `json:"label_tracks"`
-}
-
 func Handler(ctx context.Context) error {
-	client, err := getApp()
+	app, err := getApp()
 	if err != nil {
 		return err
 	}
 
 	labelId := 77423
 
-	label, err := client.GetLabel(labelId)
+	label, err := app.GetLabel(labelId)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("%+v\n", label)
-	_, err = client.SQLDriver.Exec(fmt.Sprintf(`
-		UPDATE dg_labels
-		SET
-			label_name = ?,
-			added_datetime = ?
-		WHERE label_id = ?
-	`), label.Name, time.Now(), label.ID)
+	err = app.UpdateLabelWithAddedDatetime(label)
 	if err != nil {
 		return err
 	}
 
-	l := Label{}
-	selDB := client.SQLDriver.QueryRow(fmt.Sprintf(`
-		SELECT
-			highest_dg_release,
-			label_releases,
-			label_tracks
-		FROM dg_labels
-		WHERE label_id = ?
-	`), label.ID)
-	err = selDB.Scan(
-		&l.HighestReleaseID,
-		&l.LabelReleases,
-		&l.LabelTracks,
-	)
+	localLabel, err := app.GetLabelInfo(label.ID)
 	if err != nil {
 		return err
 	}
-	client.highestReleaseID = l.HighestReleaseID
-	client.labelReleases = l.LabelReleases
-	client.labelTracks = l.LabelTracks
 
-	maxPages := 1
-	page := 1
-	for page <= maxPages {
-		releases, err := client.GetLabelReleases(page, labelId)
-		if err != nil {
-			return err
-		}
-		maxPages = releases.Pagination.Pages
-		log.Printf("Page %d/%d\n", page, maxPages)
-		page += 1
+	log.Printf("%+v\n", localLabel)
 
-		err = client.populateUniqueMasterReleases(releases)
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, masterReleaseId := range client.uniqueMasterReleases {
-		alreadyStored, err := client.masterReleaseAlreadyStored(labelId, masterReleaseId)
-		if err != nil {
-			return err
-		}
-		if alreadyStored {
-			fmt.Println("Already stored")
-			continue
-		}
-
-		fmt.Printf("tracks in %d %d\n", masterReleaseId, len(client.uniqueMasterReleasesExistence[masterReleaseId].Tracklist))
-		err = client.addTracks(client.uniqueMasterReleasesExistence[masterReleaseId], masterReleaseId, labelId)
+	for {
+		fmt.Println("weffwe")
+		releases, err := app.GetLabelReleases(localLabel.LastPage, labelId)
 		if err != nil {
 			return err
 		}
 
-		client.labelReleases += 1
-		client.labelTracks += len(client.uniqueMasterReleasesExistence[masterReleaseId].Tracklist)
-	}
+		localLabel.MaxPages = releases.Pagination.Pages
 
-	_, err = client.SQLDriver.Exec(fmt.Sprintf(`
-		UPDATE dg_labels
-		SET
-			highest_dg_release = ?,
-			label_releases = ?,
-			label_tracks = ?
-		WHERE label_id = ?;
-	`), client.highestReleaseID, client.labelReleases, client.labelTracks, label.ID)
-	if err != nil {
-		return err
+		log.Printf("Page %d/%d\n", localLabel.LastPage + 1, localLabel.MaxPages + 1)
+
+		uniqueMasterReleases, skipped, err := app.populateUniqueMasterReleases(releases, localLabel)
+		if err != nil {
+			return errors.Wrap(err, "failed to populate unique master releases")
+		}
+
+		log.Printf("Skipped %d, kept: %+v\n", skipped, uniqueMasterReleases)
+
+		err = app.persistReleasesTracks(localLabel, uniqueMasterReleases)
+		if err != nil {
+			return errors.Wrap(err, "failed to persist releases tracks")
+		}
+
+		localLabel.LastPage += 1
+		isLastPage := localLabel.LastPage > localLabel.MaxPages
+
+		// Save stats and cursors after each page, so lambda timeouts are no problem!
+		err = app.UpdateLabelWithStats(localLabel, isLastPage)
+		if err != nil {
+			return err
+		}
+
+		if isLastPage {
+			break
+		}
 	}
 
 	return nil
 }
 
-func (client *retryableDiscogsClient) populateUniqueMasterReleases(releases *discogs.LabelReleases) error {
-	for _, release := range releases.Releases {
-		id := release.ID
-		if id <= client.highestReleaseID {
+func (client *App) populateUniqueMasterReleases(releases *discogs.LabelReleases, localLabel LocalLabel) ([]int, int, error) {
+	var uniqueMasterReleases []int
+	var skipped int
+
+	for _, labelRelease := range releases.Releases {
+		id := labelRelease.ID
+		if isReleaseAlreadyStored(id, localLabel) {
+			skipped += 1
 			continue
 		}
-		client.highestReleaseID = id
+		localLabel.HighestReleaseID = id
 
-		resp, err := client.GetRelease(id)
+		release, err := client.GetRelease(id)
+		if err != nil {
+			return uniqueMasterReleases, skipped, err
+		}
+
+		var masterID int
+		if release.MasterID == 0 {
+			masterID = id
+		} else {
+			masterID = release.MasterID
+		}
+
+		if _, ok := localLabel.MasterReleasesCache[masterID]; !ok {
+			uniqueMasterReleases = append(uniqueMasterReleases, masterID)
+			localLabel.MasterReleasesCache[masterID] = *release
+			log.Printf("%d => %d\n", id, masterID)
+		}
+	}
+	return uniqueMasterReleases, skipped, nil
+}
+
+func (client *App) persistReleasesTracks(localLabel LocalLabel, uniqueMasterReleases []int) error {
+	for _, masterReleaseId := range uniqueMasterReleases {
+		if alreadyStored, err := client.isMasterReleaseAlreadyStored(localLabel.ID, masterReleaseId); err != nil {
+			return err
+		} else if alreadyStored {
+			fmt.Println("Already stored")
+			continue
+		}
+
+		fmt.Printf("tracks in %d %d\n", masterReleaseId, len(localLabel.MasterReleasesCache[masterReleaseId].Tracklist))
+		err := client.AddTracks(localLabel.MasterReleasesCache[masterReleaseId], masterReleaseId, localLabel.ID)
 		if err != nil {
 			return err
 		}
 
-		masterID := resp.MasterID
-		if masterID == 0 {
-			masterID = release.ID
-		}
-
-		if _, ok := client.uniqueMasterReleasesExistence[masterID]; !ok {
-			client.uniqueMasterReleases = append(client.uniqueMasterReleases, masterID)
-			client.uniqueMasterReleasesExistence[masterID] = *resp
-			log.Printf("%d => %d\n", id, masterID)
-		}
+		localLabel.LabelReleases += 1
+		localLabel.LabelTracks += len(localLabel.MasterReleasesCache[masterReleaseId].Tracklist)
 	}
+
 	return nil
+}
+
+func isReleaseAlreadyStored(releaseId int, localLabel LocalLabel) bool {
+	// Here we assume that old releases that were recently added to a label
+	// will have a new/high release ID.
+	return localLabel.DidInit.Bool && releaseId <= localLabel.HighestReleaseID
 }
 
 func main() {
@@ -204,7 +204,7 @@ func main() {
 	} else {
 		err := Handler(context.TODO())
 		if err != nil {
-			panic(err.Error())
+			fmt.Println(err.Error())
 		}
 	}
 }

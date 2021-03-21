@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
 	"github.com/irlndts/go-discogs"
+	"github.com/pkg/errors"
 	"strconv"
 )
 
@@ -21,7 +22,7 @@ type Track struct {
 	ArtistsSort 	string 					`json:"artists_sort"`
 }
 
-func (client *retryableDiscogsClient) addTracks(release discogs.Release, masterReleaseID int, label int) error {
+func (client *App) AddTracks(release discogs.Release, masterReleaseID int, label int) error {
 	for _, chunk := range chunkSlice(release.Tracklist, maxBatchSize) {
 		input := &dynamodb.BatchWriteItemInput{}
 		writeRequests, err := composeBatchInputs(chunk, masterReleaseID, client.DynamoDBTracksTable, release, label)
@@ -32,7 +33,7 @@ func (client *retryableDiscogsClient) addTracks(release discogs.Release, masterR
 
 		res, err := client.DynamoDB.BatchWriteItem(input)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to batch write item tracks")
 		}
 		if len(res.UnprocessedItems) > 0 {
 			return fmt.Errorf("unprocessed items")
@@ -41,34 +42,7 @@ func (client *retryableDiscogsClient) addTracks(release discogs.Release, masterR
 	return nil
 }
 
-func composeBatchInputs(tracks []discogs.Track, masterReleaseID int, name string, release discogs.Release, label int) (map[string][]*dynamodb.WriteRequest, error) {
-	var wrArr []*dynamodb.WriteRequest
-
-	for i, track := range tracks {
-		av, err := dynamodbattribute.MarshalMap(Track{
-			track,
-			label,
-			fmt.Sprintf("%d-%d", masterReleaseID, i),
-			release.Artists,
-			release.ArtistsSort,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		pr := dynamodb.PutRequest{}
-		pr.SetItem(av)
-		wr := dynamodb.WriteRequest{}
-		wr.SetPutRequest(&pr)
-
-		wrArr = append(wrArr, &wr)
-	}
-	wrMap := make(map[string][]*dynamodb.WriteRequest, 1)
-	wrMap[name] = wrArr
-	return wrMap, nil
-}
-
-func (client *retryableDiscogsClient) masterReleaseAlreadyStored(labelId, masterReleaseId int) (bool, error) {
+func (client *App) isMasterReleaseAlreadyStored(labelId, masterReleaseId int) (bool, error) {
 	queryInput := &dynamodb.QueryInput{
 		KeyConditions: map[string]*dynamodb.Condition{
 			"dg_label_id": {
@@ -94,10 +68,37 @@ func (client *retryableDiscogsClient) masterReleaseAlreadyStored(labelId, master
 
 	result, err := client.DynamoDB.Query(queryInput)
 	if err != nil {
-		return false, err
+		return false, errors.Wrap(err, "failed to query master release")
 	}
 
 	return *result.Count > int64(0), err
+}
+
+func composeBatchInputs(tracks []discogs.Track, masterReleaseID int, name string, release discogs.Release, label int) (map[string][]*dynamodb.WriteRequest, error) {
+	var wrArr []*dynamodb.WriteRequest
+
+	for i, track := range tracks {
+		av, err := dynamodbattribute.MarshalMap(Track{
+			track,
+			label,
+			fmt.Sprintf("%d-%d", masterReleaseID, i),
+			release.Artists,
+			release.ArtistsSort,
+		})
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to marshal track as batch inputs")
+		}
+
+		pr := dynamodb.PutRequest{}
+		pr.SetItem(av)
+		wr := dynamodb.WriteRequest{}
+		wr.SetPutRequest(&pr)
+
+		wrArr = append(wrArr, &wr)
+	}
+	wrMap := make(map[string][]*dynamodb.WriteRequest, 1)
+	wrMap[name] = wrArr
+	return wrMap, nil
 }
 
 func chunkSlice(slice []discogs.Track, chunkSize int) [][]discogs.Track {
