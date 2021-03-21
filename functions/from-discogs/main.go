@@ -95,10 +95,7 @@ func Handler(ctx context.Context) error {
 		return err
 	}
 
-	log.Printf("%+v\n", localLabel)
-
 	for {
-		fmt.Println("weffwe")
 		releases, err := app.GetLabelReleases(localLabel.LastPage, labelId)
 		if err != nil {
 			return err

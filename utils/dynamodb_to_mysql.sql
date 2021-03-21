@@ -2,16 +2,18 @@ create table dg_labels
 (
     id                    int auto_increment
         primary key,
-    label_id              varchar(256)  not null,
-    label_name            varchar(256)  not null,
-    label_tracks          int default 0 null,
-    last_release_datetime datetime      null,
-    images                json          null,
-    added_datetime        datetime      null,
-    updated_datetime      datetime      null,
-    highest_dg_release    int default 0 null,
-    found_tracks          int default 0 null,
-    label_releases        int default 0 null,
+    label_id              varchar(256)         not null,
+    label_name            varchar(256)         not null,
+    label_tracks          int        default 0 null,
+    last_release_datetime datetime             null,
+    images                json                 null,
+    added_datetime        datetime             null,
+    updated_datetime      datetime             null,
+    highest_dg_release    int        default 0 null,
+    found_tracks          int        default 0 null,
+    label_releases        int        default 0 null,
+    last_page             int        default 0 null,
+    did_init              tinyint(1) default 0 null,
     constraint dg_labels_label_id_uindex
         unique (label_id)
 );
