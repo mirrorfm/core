@@ -34,6 +34,8 @@ type Category struct {
 	SQLTable 		string // output
 	SNSTopic        string // output
 	DynamoCursor 	string
+	IDField  		string
+	NameField       string
 }
 
 const (
@@ -47,12 +49,16 @@ var (
 			"yt_channels",
 			"arn:aws:sns:%s:%s:mirrorfm_incoming_youtube_channel",
 			"from_github_last_successful_channel",
+			"channel_id",
+			"channel_name",
 		},
 		"discogs-labels.csv": {
 			"discogs-labels.csv",
 			"dg_labels",
 			"arn:aws:sns:%s:%s:mirrorfm_incoming_discogs_labels",
 			"from_github_last_successful_label",
+			"label_id",
+			"label_name",
 		},
 	}
 )
@@ -129,7 +135,7 @@ func (client *App) ProcessFile(repo, file string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("Err")
+		return errors.New(fmt.Sprintf("status %d for %s", resp.StatusCode, url))
 	}
 
 	var lines []string
@@ -137,8 +143,9 @@ func (client *App) ProcessFile(repo, file string) error {
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
-
-	fmt.Printf("%s", lines)
+	if len(lines) == 0 {
+		return errors.New("nothing in file")
+	}
 
 	cat := categories[file]
 
@@ -147,24 +154,21 @@ func (client *App) ProcessFile(repo, file string) error {
 		return err
 	}
 
-	current += 1
-	total := len(lines) - 1
-
-	if len(lines) == 0 {
-		return errors.New("Nothing in file")
-	}
-
-	err = client.processLines(lines, current, total, cat)
+	current, err = client.processLines(lines, current, cat)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to process lines")
 	}
 
 	return client.SaveCursor(cat.DynamoCursor, current)
 }
 
-func (client *App) processLines(lines []string, current, total int, cat Category) error {
-	for current <= total {
+func (client *App) processLines(lines []string, current int, cat Category) (int, error) {
+	total := len(lines) - 1
+
+	for current < total {
+		current += 1
 		currentLine := lines[current]
+
 		parts := strings.Split(currentLine, ",")
 		id := parts[0]
 		name := parts[1]
@@ -174,9 +178,10 @@ func (client *App) processLines(lines []string, current, total int, cat Category
 			break
 		}
 
-		err := client.InsertIntoTable(id, name, cat.SQLTable)
+		err := client.InsertIntoTable(id, name, cat)
 		if err != nil {
-			fmt.Printf("Possibly a duplicate, nothing to do %s", err.Error())
+			fmt.Printf("skip duplicate #%d: %s\n", current, err.Error())
+			continue
 		}
 
 		_, err = client.SNSClient.Publish(&sns.PublishInput{
@@ -184,18 +189,22 @@ func (client *App) processLines(lines []string, current, total int, cat Category
 			Message:  aws.String(id),
 		})
 		if err != nil {
-			return err
+			return current, errors.Wrap(err, fmt.Sprintf("failed to publish %s on %s\n", id, cat.SNSTopic))
 		}
 	}
-	return nil
+
+	return current, nil
 }
 
-func (client *App) InsertIntoTable(id, name, tableName string) error {
+func (client *App) InsertIntoTable(id, name string, cat Category) error {
 	_, err := client.SQLDriver.Exec(fmt.Sprintf(`
-		INSERT INTO %s (id, name, added_datetime)
+		INSERT INTO %s (%s, %s, added_datetime)
 		VALUES (?, ?, ?)
-	`, tableName), id, name, time.Now())
-	return errors.Wrap(err, fmt.Sprintf("failed to insert into %s", tableName))
+	`, cat.SQLTable, cat.IDField, cat.NameField), id, name, time.Now())
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to insert into %s", cat.SQLTable))
+	}
+	return nil
 }
 
 func (client *App) GetCursor(cursor string) (int, error) {
@@ -214,28 +223,31 @@ func (client *App) GetCursor(cursor string) (int, error) {
 		return 0, err
 	}
 
-	val, ok := resp.Item["name"]
-	if ok {
+	val, ok := resp.Item["value"]
+	if !ok {
 		return 0, nil
 	}
 
-	return strconv.Atoi(*val.S)
+	return strconv.Atoi(*val.N)
 }
 
 func (client *App) SaveCursor(cursor string, value int) error {
-	_, err := client.DynamoDB.PutItem(&dynamodb.PutItemInput{
+	if _, err := client.DynamoDB.PutItem(&dynamodb.PutItemInput{
 		TableName: &client.CursorTable,
 		Item: map[string]*dynamodb.AttributeValue{
 			"name": {
 				S: aws.String(cursor),
 			},
 			"value": {
-				N: aws.String(strconv.Itoa(value - 1)),
+				N: aws.String(strconv.Itoa(value)),
 			},
 		},
-	})
+	}); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to save %s cursor", cursor))
+	}
+	fmt.Printf("successfully set cursor to %d\n", value)
 
-	return err
+	return nil
 }
 
 func main() {
