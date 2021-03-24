@@ -76,16 +76,56 @@ class Memoize:
 
 PLAYLIST_EXPECTED_MAX_LENGTH = 11000
 WEBSITE = "https://mirror.fm"
-HOST = "yt"
+
 BATCH_GET_SIZE = 1000
 
 # DB
 client = boto3.client("dynamodb", region_name='eu-west-1')
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
 cursors_table = dynamodb.Table('mirrorfm_cursors')
-tracks_table = dynamodb.Table('mirrorfm_yt_tracks')
-duplicates_table = dynamodb.Table('mirrorfm_yt_duplicates')
 events_table = dynamodb.Table('mirrorfm_events')
+
+YT_HOST = "yt"
+DG_HOST = "dg"
+
+cats = {
+    YT_HOST: {
+        "key": YT_HOST,
+        "tracks_table": dynamodb.Table('mirrorfm_yt_tracks'),
+        "duplicates_table": dynamodb.Table('mirrorfm_yt_duplicates'),
+        "entity_id": "channel_id",
+        "host_entity_id": "yt_channel_id",
+        "entity_name": "channel_name",
+        "track_id": "yt_track_id",
+        "track_name": "yt_track_name",
+        "track_composite": "yt_track_composite",
+        "entity_table": "yt_channels",
+        "genres_table": "yt_genres",
+        "playlist_table": "yt_playlists",
+        "cursor_start_track_key": "start_yt_track_key",
+        "cursor_last_successful_entity": "to_spotify_last_successful_channel",
+        "description": "YouTube channel"
+    },
+    DG_HOST: {
+        "key": DG_HOST,
+        "tracks_table": dynamodb.Table('mirrorfm_dg_tracks'),
+        "duplicates_table": dynamodb.Table('mirrorfm_dg_duplicates'),
+        "entity_id": "label_id",
+        "host_entity_id": "dg_label_id",
+        "entity_name": "label_name",
+        "track_id": "dg_track_id",
+        "track_name": "dg_track_name",
+        "track_composite": "dg_track_composite",
+        "entity_table": "dg_labels",
+        "genres_table": "dg_genres",
+        "playlist_table": "dg_playlists",
+        "cursor_start_track_key": "start_dg_track_key",
+        "cursor_last_successful_entity": "to_spotify_last_successful_label",
+        "description": "Discogs label"
+    }
+}
+
+current_host = YT_HOST
 
 # Spotify
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
@@ -181,18 +221,18 @@ def find_on_spotify(sp, track_name):
         raise e
 
 
-def get_last_playlist_for_channel(channel_id):
+def get_last_playlist(entity_id):
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM yt_playlists WHERE channel_id="%s" ORDER BY num DESC LIMIT 1' % channel_id)
+    cursor.execute('SELECT * FROM ' + cats[current_host]['playlist_table'] + ' WHERE ' + cats[current_host]['entity_id'] + '="%s" ORDER BY num DESC LIMIT 1' % entity_id)
     playlist = cursor.fetchone()
     if not playlist:
         return None, None
     return [playlist, playlist['num']]  # full item, num
 
 
-def add_channel_cover_to_playlist(sp, channel_id, playlist_id):
+def add_channel_cover_to_playlist(sp, entity_id, playlist_id):
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM yt_channels WHERE channel_id="%s"' % channel_id)
+    cursor.execute('SELECT * FROM ' + cats[current_host]['entity_table'] + ' WHERE ' + cats[current_host]['entity_id'] + '="%s"' % entity_id)
     row = cursor.fetchone()
     if row:
         sp.playlist_upload_cover_image(
@@ -203,54 +243,56 @@ def get_as_base64(url):
     return base64.b64encode(requests.get(url).content).decode("utf-8")
 
 
-def create_playlist_for_channel(sp, channel_id, num=1):
+def create_playlist(sp, entity_id, num=1):
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_channels WHERE channel_id='%s'" % channel_id)
+    cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE " + cats[current_host]['entity_id'] + "='%s'" % entity_id)
     row = cursor.fetchone()
     print(row)
 
-    playlist_name = row['channel_name']
+    playlist_name = row[cats[current_host]['entity_name']]
     if num > 1:
         playlist_name += ' (%d)' % num
     res = sp.user_playlist_create(SPOTIPY_USER, playlist_name, public=True)
     playlist_id = res['id']
     item = {
-        'yt_channel_id': channel_id,
+        cats[current_host]['host_entity_id']: entity_id,
         'num': num,
         'spotify_playlist': playlist_id
     }
     cur = conn.cursor()
-    cur.execute('insert into yt_playlists (channel_id, num, spotify_playlist) values(%s, %s, %s)',
-                [channel_id, num, playlist_id])
+    cur.execute('insert into ' + cats[current_host]['playlist_table'] + ' (' + cats[current_host]['entity_id'] + ', num, spotify_playlist) values(%s, %s, %s)',
+                [entity_id, num, playlist_id])
     conn.commit()
     try:
-        add_channel_cover_to_playlist(sp, channel_id, playlist_id)
+        add_channel_cover_to_playlist(sp, entity_id, playlist_id)
     except Exception as e:
         print(e)
     return [item, num]
 
 
-def get_playlist_for_channel(sp, channel_id):
-    pl, num = get_last_playlist_for_channel(channel_id)
+def get_playlist(sp, entity_id):
+    pl, num = get_last_playlist(entity_id)
     if pl:
         return pl, num
-    return create_playlist_for_channel(sp, channel_id)
+    return create_playlist(sp, entity_id)
 
 
-def is_track_duplicate(channel_id, track_spotify_uri):
-    return 'Item' in duplicates_table.get_item(
+def is_track_duplicate(entity_id, track_spotify_uri):
+    table = cats[current_host]['duplicates_table']
+    return 'Item' in table.get_item(
         Key={
-            'yt_channel_id': channel_id,
-            'yt_track_id': track_spotify_uri
+            cats[current_host]['host_entity_id']: entity_id,
+            cats[current_host]['track_id']: track_spotify_uri
         }
     )
 
 
-def add_track_to_duplicate_index(channel_id, track_spotify_uri, spotify_playlist):
-    duplicates_table.put_item(
+def add_track_to_duplicate_index(entity_id, track_spotify_uri, spotify_playlist):
+    table = cats[current_host]['duplicates_table']
+    table.put_item(
         Item={
-            'yt_channel_id': channel_id,
-            'yt_track_id': track_spotify_uri,
+            cats[current_host]['host_entity_id']: entity_id,
+            cats[current_host]['track_id']: track_spotify_uri,
             'spotify_playlist': spotify_playlist
         }
     )
@@ -266,8 +308,8 @@ def playlist_seems_full(e, sp, spotify_playlist):
     return total == PLAYLIST_EXPECTED_MAX_LENGTH
 
 
-def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
-    item, playlist_num = get_playlist_for_channel(sp, channel_id)
+def add_track_to_spotify_playlist(sp, track_spotify_uri, entity_id):
+    item, playlist_num = get_playlist(sp, entity_id)
     spotify_playlist = item['spotify_playlist']
     try:
         sp.user_playlist_add_tracks(SPOTIPY_USER,
@@ -276,14 +318,14 @@ def add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id):
                                     position=0)
     except Exception as e:
         if playlist_seems_full(e, sp, spotify_playlist):
-            spotify_playlist, _ = create_playlist_for_channel(sp, channel_id, playlist_num+1)
+            spotify_playlist, _ = create_playlist(sp, entity_id, playlist_num + 1)
             # retry same function to use API limit logic
-            add_track_to_spotify_playlist(sp, track_spotify_uri, channel_id)
+            add_track_to_spotify_playlist(sp, track_spotify_uri, entity_id)
         else:
             # Reached API limit?
             raise e
     add_track_to_duplicate_index(
-        channel_id,
+        entity_id,
         track_spotify_uri,
         spotify_playlist)
     return spotify_playlist
@@ -312,12 +354,13 @@ def find_genres(sp, info, new_track_genres):
 
 
 def spotify_lookup(sp, record, new_track_genres):
-    spotify_track_info = find_on_spotify(sp, record['yt_track_name'])
+    spotify_track_info = find_on_spotify(sp, record[ cats[current_host]['track_name']])
+    tracks_table = cats[current_host]['tracks_table']
 
     # Safety duplicate check needed because
     # some duplicates were found in some playlists for unknown reasons.
     if spotify_track_info and not is_track_duplicate(
-            record['yt_channel_id'], spotify_track_info['uri']):
+            record[cats[current_host]['host_entity_id']], spotify_track_info['uri']):
         print(
             "[√]",
             spotify_track_info['uri'],
@@ -326,81 +369,82 @@ def spotify_lookup(sp, record, new_track_genres):
             spotify_track_info['name'],
             "\n",
             "\t\t\t\t\t",
-            record['yt_track_name'])
+            record[cats[current_host]['track_name']])
         genres = find_genres(sp, spotify_track_info, new_track_genres)
         spotify_playlist = add_track_to_spotify_playlist(
-            sp, spotify_track_info['uri'], record['yt_channel_id'])
+            sp, spotify_track_info['uri'], record[cats[current_host]['host_entity_id']])
         tracks_table.update_item(
             Key={
-                'yt_channel_id': record['yt_channel_id'],
-                'yt_track_composite': record['yt_track_composite']
+                cats[current_host]['host_entity_id']: record[cats[current_host]['host_entity_id']],
+                cats[current_host]['track_composite']: record[cats[current_host]['track_composite']]
             },
             UpdateExpression="set spotify_uri = :spotify_uri,\
                 spotify_playlist = :spotify_playlist,\
                 spotify_found_time = :spotify_found_time,\
-                yt_track_name = :yt_track_name,\
+                %s = :%s,\
                 spotify_track_info = :spotify_track_info,\
-                genres = :genres",
+                genres = :genres" % cats[current_host]['track_name'],
             ExpressionAttributeValues={
                 ':spotify_uri': spotify_track_info['uri'],
                 ':spotify_playlist': spotify_playlist,
                 ':genres': genres,
                 ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
-                ':yt_track_name': record['yt_track_name'],
+                ':%s' % cats[current_host]['track_name']: record[cats[current_host]['track_name']],
                 ':spotify_track_info': spotify_track_info
             }
         )
         return True
 
 
-def get_next_channel():
-    to_spotify_last_successful_channel = get_cursor('to_spotify_last_successful_channel')
-    if 'Item' in to_spotify_last_successful_channel and to_spotify_last_successful_channel['Item']['value']:
-        last_channel_id = int(to_spotify_last_successful_channel['Item']['value'])
+def get_next_entity():
+    cursor = get_cursor(cats[current_host]['cursor_last_successful_entity'])
+    if 'Item' in cursor and cursor['Item']['value']:
+        last_entity_id = int(cursor['Item']['value'])
     else:
-        last_channel_id = 1
+        last_entity_id = 1
 
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_channel_id))
+    cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_entity_id))
     return cursor.fetchone()
 
 
-def save_cursors(just_processed_tracks, to_spotify_last_successful_channel):
-    print('to_spotify_last_successful_channel', to_spotify_last_successful_channel)
+def save_cursors(just_processed_tracks, to_spotify_last_successful_entity):
+    print(cats[current_host]['cursor_last_successful_entity'], to_spotify_last_successful_entity)
     if 'LastEvaluatedKey' in just_processed_tracks:
         print('LastEvaluatedKey in just_processed_tracks')
-        set_cursor('start_yt_track_key', just_processed_tracks['LastEvaluatedKey'])
-        print('set cursor start_yt_track_key with', just_processed_tracks['LastEvaluatedKey'])
+        set_cursor(cats[current_host]['cursor_start_track_key'], just_processed_tracks['LastEvaluatedKey'])
+        print('set cursor %s with' % cats[current_host]['cursor_start_track_key'], just_processed_tracks['LastEvaluatedKey'])
     else:
         print('no LastEvaluatedKey in just_processed_tracks')
         cursors_table.delete_item(
             Key={
-                'name': 'start_yt_track_key'
+                'name': cats[current_host]['cursor_start_track_key']
             }
         )
-        print('deleted start_yt_track_key')
-        set_cursor('to_spotify_last_successful_channel', to_spotify_last_successful_channel)
-        print('set cursor to_spotify_last_successful_channel with', to_spotify_last_successful_channel)
+        print('deleted %s' % cats[current_host]['cursor_start_track_key'])
+        set_cursor(cats[current_host]['cursor_last_successful_entity'], to_spotify_last_successful_entity)
+        print('set cursor %s with' % cats[current_host]['cursor_last_successful_entity'], to_spotify_last_successful_entity)
 
 
-def get_next_tracks(channel_id):
-    start_yt_track_key = get_cursor('start_yt_track_key')
-    if 'Item' in start_yt_track_key:
+def get_next_tracks(entity_id):
+    tracks_table = cats[current_host]['tracks_table']
+    cursor = get_cursor(cats[current_host]['cursor_start_track_key'])
+    if 'Item' in cursor:
         print(
             "Starting from track",
-            start_yt_track_key['Item']['value']['yt_track_composite'])
-        print(channel_id)
+            cursor['Item']['value'][cats[current_host]['track_composite']])
+        print(entity_id)
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
-            ExclusiveStartKey=start_yt_track_key['Item']['value'],
-            KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+            ExclusiveStartKey=cursor['Item']['value'],
+            KeyConditionExpression=Key(cats[current_host]['host_entity_id']).eq(entity_id))
     else:
         print("Starting from first track")
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
-            KeyConditionExpression=Key('yt_channel_id').eq(channel_id))
+            KeyConditionExpression=Key(cats[current_host]['host_entity_id']).eq(entity_id))
 
 
 def deserialize_record(record):
@@ -412,7 +456,7 @@ def deserialize_record(record):
 
 def update_playlist_description(sp, pl_id, channel_aid):
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_genres WHERE yt_channel_id=%s ORDER BY count DESC LIMIT 6", channel_aid)
+    cursor.execute("SELECT * FROM " + cats[current_host]['genres_table'] + " WHERE " + cats[current_host]['host_entity_id'] + "=%s ORDER BY count DESC LIMIT 6" % channel_aid)
     genres = cursor.fetchall()
     genre_names = [g["genre_name"] for g in genres]
 
@@ -420,11 +464,18 @@ def update_playlist_description(sp, pl_id, channel_aid):
     genres_str = ''
     if len(genre_names) > 0:
         genres_str = ' with ' + ', '.join(genre_names)
-    desc = "YouTube channel" + genres_str + ". Add any youtube channel on www.mirror.fm #mirrorfm"
+    desc = cats[current_host]['description'] + genres_str + ". Add any youtube channel or discogs label on www.mirror.fm #mirrorfm"
     sp.playlist_change_details(pl_id, description=desc)
 
 
+def detect_host(event):
+    return YT_HOST
+
+
 def handle(event, context):
+    global current_host
+    current_host = detect_host(event)
+
     new_track_genres = []
 
     sp = get_spotify()
@@ -439,70 +490,70 @@ def handle(event, context):
                 total_searched += 1
                 if spotify_lookup(sp, deserialize_record(record), new_track_genres):
                     total_added += 1
-        channel_id = event['Records'][0]['NewImage']['yt_channel_id']['S']
+        entity_id = event['Records'][0]['NewImage'][cats[current_host]['host_entity_id']]['S']
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM yt_channels WHERE channel_id=%s", channel_id)
-        channel = cursor.fetchone()
-        channel_aid = channel['id']
-        channel_name = channel['channel_name']
+        cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE " + cats[current_host]['entity_id'] + "=%s", entity_id)
+        entity = cursor.fetchone()
+        entity_aid = entity['id']
+        entity_name = entity[cats[current_host]['entity_name']]
     else:
         # Rediscover tracks
-        channel_to_process = get_next_channel()
-        channel_aid = channel_to_process['id']
-        channel_id = channel_to_process['channel_id']
+        channel_to_process = get_next_entity()
+        entity_aid = channel_to_process['id']
+        entity_id = channel_to_process[cats[current_host]['entity_id']]
 
         # Channel might not have a name yet if it has just been added
-        channel_name = channel_to_process['channel_name']
-        print("Rediscovering channel", channel_name or channel_id)
+        entity_name = channel_to_process['channel_name']
+        print("Rediscovering entity", entity_name or entity_id)
 
-        tracks_to_process = get_next_tracks(channel_id)
+        tracks_to_process = get_next_tracks(entity_id)
 
         for record in tracks_to_process['Items']:
             if 'spotify_uri' not in record:
                 total_searched += 1
                 if spotify_lookup(sp, record, new_track_genres):
                     total_added += 1
-        save_cursors(tracks_to_process, channel_aid)
+        save_cursors(tracks_to_process, entity_aid)
 
     if total_searched > 0:
         print(
-            "Searched %s, found %s track(s), updating channel info for %s" %
-            (total_searched, total_added, channel_id))
+            "Searched %s, found %s track(s), updating entity info for %s" %
+            (total_searched, total_added, entity_id))
 
         # TODO What if the code above updated 2 playlists?
-        pl_item, num = get_last_playlist_for_channel(channel_id)
+        pl_item, num = get_last_playlist(entity_id)
         if not pl_item:
             return
 
         pl_id = pl_item['spotify_playlist']
-        update_playlist_description(sp, pl_id, channel_aid)
+        update_playlist_description(sp, pl_id, entity_aid)
         pl = sp.playlist(pl_id)
 
         cursor = conn.cursor()
 
         if total_added > 0:
             playlist_genres = count_frequency(new_track_genres)
-            cursor.execute('UPDATE yt_playlists SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
+            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
                            [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
             for genre in playlist_genres:
                 cursor.execute(
-                    'INSERT INTO yt_genres (yt_channel_id, genre_name, count, last_updated) VALUES ("%s", %s, 1, NOW()) ON DUPLICATE KEY UPDATE count = count + 1, last_updated=NOW()',
-                    [channel_aid, genre])
+                    'INSERT INTO ' + cats[current_host]['genres_table'] + ' (' + cats[current_host]['host_entity_id'] + ', genre_name, count, last_updated) VALUES ("%s", %s, 1, NOW()) ON DUPLICATE KEY UPDATE count = count + 1, last_updated=NOW()',
+                    [entity_aid, genre])
 
             conn.commit()
             events_table.put_item(
                 Item={
-                    'host': 'yt',
+                    'host': current_host,
                     'timestamp': int(time.time()),
                     'added': int(total_added),
                     'genres': playlist_genres,
-                    'channel_id': channel_id,
+                    cats[current_host]['entity_id']: entity_id,
                     'spotify_playlist': pl_id,
-                    'channel_name': channel_name
+                    cats[current_host]['entity_name']: entity_name
                 }
             )
         else:
-            cursor.execute('UPDATE yt_playlists SET count_followers="%s", last_search_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers="%s", last_search_time=now() WHERE spotify_playlist="%s" AND num="%s"',
                            [pl["followers"]["total"], pl_id, num])
             conn.commit()
 
