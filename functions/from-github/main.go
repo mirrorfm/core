@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -63,7 +64,7 @@ var (
 	}
 )
 
-func getApp() (App, error) {
+func getApp(ctx context.Context) (App, error) {
 	// MySQL
 	dbHost := os.Getenv("DB_HOST")
 	dbUser := os.Getenv("DB_USERNAME")
@@ -88,7 +89,11 @@ func getApp() (App, error) {
 
 	AwsAccountId, exists := os.LookupEnv("AWS_ACCOUNT_ID")
 	if !exists {
-		return App{}, errors.Errorf("missing environment variable AWS_ACCOUNT_ID")
+		lc, ok := lambdacontext.FromContext(ctx)
+		if !ok {
+			return App{}, errors.Errorf("missing environment variable AWS_ACCOUNT_ID")
+		}
+		AwsAccountId = strings.Split(lc.InvokedFunctionArn, ":")[4]
 	}
 
 	return App{
@@ -101,8 +106,8 @@ func getApp() (App, error) {
 	}, nil
 }
 
-func Handler(evt github.PushEvent, ctx context.Context) error {
-	app, err := getApp()
+func Handler(ctx context.Context, evt github.PushEvent) error {
+	app, err := getApp(ctx)
 	if err != nil {
 		return err
 	}
@@ -174,7 +179,7 @@ func (client *App) processLines(lines []string, current int, cat Category) (int,
 		name := parts[1]
 
 		if id == "" {
-			fmt.Printf("Line %s is empty", id)
+			fmt.Printf("line %s is empty", id)
 			break
 		}
 
@@ -191,6 +196,7 @@ func (client *App) processLines(lines []string, current int, cat Category) (int,
 		if err != nil {
 			return current, errors.Wrap(err, fmt.Sprintf("failed to publish %s on %s\n", id, cat.SNSTopic))
 		}
+		fmt.Printf("published %s on %s\n", id, cat.SNSTopic)
 	}
 
 	return current, nil
@@ -256,7 +262,8 @@ func main() {
 	} else {
 		// Local run
 		name := "mirrorfm/data"
-		err := Handler(github.PushEvent{
+		err := Handler(context.TODO(),
+			github.PushEvent{
 			Repo: &github.PushEventRepository{
 				FullName: &name,
 			},
@@ -266,7 +273,7 @@ func main() {
 					"discogs-labels.csv",
 				},
 			},
-		}, context.TODO())
+		})
 		if err != nil {
 			fmt.Println(err.Error())
 		}
