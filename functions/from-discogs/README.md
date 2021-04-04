@@ -1,11 +1,12 @@
-### Run locally
+### Purpose
 
-    export DB_USERNAME=
-    export DB_PASSWORD=
-    export DB_NAME=
-    export DB_HOST=
+Fetches discogs labels and their tracks
 
-    go run main.go
+### Commands
+
+    make setup
+    make from-discogs
+    make deploy-from-discogs
 
 ### AWS prerequesites
 

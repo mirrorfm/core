@@ -7,17 +7,11 @@ Fetches YouTube channels and their tracks
  - Cloudwatch Event (CRON)
  - New item added to "Channels" DynamoDB table
 
-### Run locally
+### Commands
 
-    virtualenv ./.venv
-    source ./.venv/bin/activate
-    pip3 install -r requirements.txt
-    YT_DEVELOPER_KEY=<YT_DEVELOPER_KEY> python3 main.py
-    deactivate
-
-### Build and deploy
-
-    apex build from-youtube >/dev/null && apex deploy from-youtube --region eu-west-1 -ldebug --env-file ./functions/from-youtube/env.json
+    make setup
+    make from-youtube
+    make deploy-to-youtube
 
 ### AWS prerequesites
 

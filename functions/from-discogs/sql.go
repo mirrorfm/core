@@ -35,7 +35,7 @@ func (client *App) GetLabelInfo(labelId int) (LocalLabel, error) {
 		WHERE label_id = ?
 	`), labelId)
 	err := selDB.Scan(
-		&l.ID,
+		&l.LabelID,
 		&l.HighestReleaseID,
 		&l.LabelReleases,
 		&l.LabelTracks,
@@ -56,7 +56,7 @@ func (client *App) UpdateLabelWithStats(localLabel LocalLabel, isLastPage bool) 
 		localLabel.DidInit = nb
 	}
 	if isLastPage {
-		localLabel.LastPage = 0
+		localLabel.LastPage = 1
 	}
 	_, err := client.SQLDriver.Exec(fmt.Sprintf(`
 		UPDATE dg_labels
@@ -68,11 +68,29 @@ func (client *App) UpdateLabelWithStats(localLabel LocalLabel, isLastPage bool) 
 			did_init = ?
 		WHERE label_id = ?;
 	`),
-	localLabel.HighestReleaseID,
-	localLabel.LabelReleases,
-	localLabel.LabelTracks,
-	localLabel.LastPage,
-	localLabel.DidInit,
-	localLabel.ID)
+		localLabel.HighestReleaseID,
+		localLabel.LabelReleases,
+		localLabel.LabelTracks,
+		localLabel.LastPage,
+		localLabel.DidInit,
+		localLabel.LabelID)
 	return errors.Wrap(err, "failed to update label stats")
+}
+
+func (client *App) GetNextLabel(lastSuccessChannel int) (LocalLabel, error) {
+	l := LocalLabel{}
+	selDB := client.SQLDriver.QueryRow(fmt.Sprintf(`
+		SELECT
+			id,
+			label_id
+		FROM dg_labels
+		WHERE (id > ? or id = 1)
+		ORDER BY id = 1
+		LIMIT 1
+	`), lastSuccessChannel)
+	err := selDB.Scan(
+		&l.ID,
+		&l.LabelID,
+	)
+	return l, errors.Wrap(err, "failed to get next label LabelID")
 }

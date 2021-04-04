@@ -1,8 +1,9 @@
-### Run locally
+### Purpose
 
-    export DB_USERNAME=
-    export DB_PASSWORD=
-    export DB_NAME=
-    export DB_HOST=
+Responds to adding discogs labels or youtube music channel via github webhook
 
-    go run main.go
+### Commands
+
+    make setup
+    make from-github
+    make deploy-from-github

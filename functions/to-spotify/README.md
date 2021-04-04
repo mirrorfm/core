@@ -21,6 +21,10 @@ Before running locally or deploying this, use `token_gen.py` to generate and sto
     SPOTIPY_CLIENT_ID=<id> SPOTIPY_CLIENT_SECRET=<secret> SPOTIPY_USER=<user> python3 main.py
     deactivate
 
+    make setup
+    make to-spotify
+    make deploy-to-spotify
+
 ### Build and deploy
 
 Fill in `./functions/to-spotify/env.json` with `SPOTIPY_CLIENT_ID` and `SPOTIPY_CLIENT_SECRET`, and then:

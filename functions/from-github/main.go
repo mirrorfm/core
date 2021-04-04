@@ -22,21 +22,21 @@ import (
 )
 
 type App struct {
-	DynamoDB    	*dynamodb.DynamoDB
-	CursorTable		string
-	SQLDriver       *sql.DB
-	SNSClient       *sns.SNS
-	Region          string
-	AwsAccountId    string
+	DynamoDB     *dynamodb.DynamoDB
+	CursorTable  string
+	SQLDriver    *sql.DB
+	SNSClient    *sns.SNS
+	Region       string
+	AwsAccountId string
 }
 
 type Category struct {
-	GithubFile 		string // input
-	SQLTable 		string // output
-	SNSTopic        string // output
-	DynamoCursor 	string
-	IDField  		string
-	NameField       string
+	GithubFile   string // input
+	SQLTable     string // output
+	SNSTopic     string // output
+	DynamoCursor string
+	IDField      string
+	NameField    string
 }
 
 const (
@@ -56,7 +56,7 @@ var (
 		"discogs-labels.csv": {
 			"discogs-labels.csv",
 			"dg_labels",
-			"arn:aws:sns:%s:%s:mirrorfm_incoming_discogs_labels",
+			"arn:aws:sns:%s:%s:mirrorfm_incoming_discogs_label",
 			"from_github_last_successful_label",
 			"label_id",
 			"label_name",
@@ -97,12 +97,12 @@ func getApp(ctx context.Context) (App, error) {
 	}
 
 	return App{
-		DynamoDB:   	dynamoClient,
-		CursorTable: 	"mirrorfm_cursors",
-		SQLDriver:  	sqlDriver,
-		SNSClient:  	snsClient,
-		Region: 		region,
-		AwsAccountId:   AwsAccountId,
+		DynamoDB:     dynamoClient,
+		CursorTable:  "mirrorfm_cursors",
+		SQLDriver:    sqlDriver,
+		SNSClient:    snsClient,
+		Region:       region,
+		AwsAccountId: AwsAccountId,
 	}, nil
 }
 
@@ -153,6 +153,7 @@ func (client *App) ProcessFile(repo, file string) error {
 	}
 
 	cat := categories[file]
+	cat.SNSTopic = fmt.Sprintf(cat.SNSTopic, client.Region, client.AwsAccountId)
 
 	current, err := client.GetCursor(cat.DynamoCursor)
 	if err != nil {
@@ -190,7 +191,7 @@ func (client *App) processLines(lines []string, current int, cat Category) (int,
 		}
 
 		_, err = client.SNSClient.Publish(&sns.PublishInput{
-			TopicArn: aws.String(fmt.Sprintf(cat.SNSTopic, client.Region, client.AwsAccountId)),
+			TopicArn: aws.String(cat.SNSTopic),
 			Message:  aws.String(id),
 		})
 		if err != nil {
@@ -206,7 +207,7 @@ func (client *App) InsertIntoTable(id, name string, cat Category) error {
 	_, err := client.SQLDriver.Exec(fmt.Sprintf(`
 		INSERT INTO %s (%s, %s, added_datetime)
 		VALUES (?, ?, ?)
-	`, cat.SQLTable, cat.IDField, cat.NameField), id, name, time.Now())
+	`, cat.SQLTable, cat.IDField, cat.NameField), id, strings.TrimSpace(name), time.Now())
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("failed to insert into %s", cat.SQLTable))
 	}
@@ -264,16 +265,16 @@ func main() {
 		name := "mirrorfm/data"
 		err := Handler(context.TODO(),
 			github.PushEvent{
-			Repo: &github.PushEventRepository{
-				FullName: &name,
-			},
-			HeadCommit: &github.HeadCommit{
-				Modified: []string{
-					"youtube-channels.csv",
-					"discogs-labels.csv",
+				Repo: &github.PushEventRepository{
+					FullName: &name,
 				},
-			},
-		})
+				HeadCommit: &github.HeadCommit{
+					Modified: []string{
+						"youtube-channels.csv",
+						"discogs-labels.csv",
+					},
+				},
+			})
 		if err != nil {
 			fmt.Println(err.Error())
 		}

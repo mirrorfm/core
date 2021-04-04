@@ -16,10 +16,11 @@ const (
 
 type Track struct {
 	discogs.Track
-	LabelId 		int 					`json:"dg_label_id"`
-	TrackComposite 	string 					`json:"dg_track_composite"`
-	Artists 		[]discogs.ArtistSource 	`json:"artists_source"`
-	ArtistsSort 	string 					`json:"artists_sort"`
+	LabelId        int                    `json:"dg_label_id"`
+	TrackComposite string                 `json:"dg_track_composite"`
+	Artists        []discogs.ArtistSource `json:"release_artists"`
+	ExtraArtists   []discogs.ArtistSource `json:"release_extraartists"`
+	ArtistsSort    string                 `json:"release_artistssort"`
 }
 
 func (client *App) AddTracks(release discogs.Release, masterReleaseID int, label int) error {
@@ -62,8 +63,8 @@ func (client *App) isMasterReleaseAlreadyStored(labelId, masterReleaseId int) (b
 				},
 			},
 		},
-		Limit:            aws.Int64(1),
-		TableName:        aws.String(client.DynamoDBTracksTable),
+		Limit:     aws.Int64(1),
+		TableName: aws.String(client.DynamoDBTracksTable),
 	}
 
 	result, err := client.DynamoDB.Query(queryInput)
@@ -74,6 +75,49 @@ func (client *App) isMasterReleaseAlreadyStored(labelId, masterReleaseId int) (b
 	return *result.Count > int64(0), err
 }
 
+func (client *App) GetCursor(cursor string) (int, error) {
+	resp, err := client.DynamoDB.GetItem(&dynamodb.GetItemInput{
+		TableName: &client.DynamoDBCursorTable,
+		Key: map[string]*dynamodb.AttributeValue{
+			"name": {
+				S: aws.String(cursor),
+			},
+		},
+		AttributesToGet: []*string{
+			aws.String("value"),
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	val, ok := resp.Item["value"]
+	if !ok {
+		return 0, nil
+	}
+
+	return strconv.Atoi(*val.N)
+}
+
+func (client *App) SaveCursor(cursor string, value int) error {
+	if _, err := client.DynamoDB.PutItem(&dynamodb.PutItemInput{
+		TableName: &client.DynamoDBCursorTable,
+		Item: map[string]*dynamodb.AttributeValue{
+			"name": {
+				S: aws.String(cursor),
+			},
+			"value": {
+				N: aws.String(strconv.Itoa(value)),
+			},
+		},
+	}); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("failed to save %s cursor", cursor))
+	}
+	fmt.Printf("successfully set cursor to %d\n", value)
+
+	return nil
+}
+
 func composeBatchInputs(tracks []discogs.Track, masterReleaseID int, name string, release discogs.Release, label int) (map[string][]*dynamodb.WriteRequest, error) {
 	var wrArr []*dynamodb.WriteRequest
 
@@ -81,8 +125,9 @@ func composeBatchInputs(tracks []discogs.Track, masterReleaseID int, name string
 		av, err := dynamodbattribute.MarshalMap(Track{
 			track,
 			label,
-			fmt.Sprintf("%d-%d", masterReleaseID, i),
+			fmt.Sprintf("%d-%03d", masterReleaseID, i),
 			release.Artists,
+			release.ExtraArtists,
 			release.ArtistsSort,
 		})
 		if err != nil {

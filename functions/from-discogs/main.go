@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -12,6 +13,9 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/irlndts/go-discogs"
 	"github.com/pkg/errors"
+	"strconv"
+
+	//"github.com/disintegration/imaging"
 	"log"
 	"os"
 )
@@ -20,17 +24,19 @@ type App struct {
 	Discogs             discogs.Discogs
 	DynamoDB            *dynamodb.DynamoDB
 	DynamoDBTracksTable string
+	DynamoDBCursorTable string
 	SQLDriver           *sql.DB
 	Backoff             backoff.BackOff
 }
 
 type LocalLabel struct {
 	ID                  int
+	LabelID             int
 	HighestReleaseID    int `json:"highest_dg_release"`
 	LabelReleases       int `json:"label_releases"`
 	LabelTracks         int `json:"label_tracks"`
 	MasterReleasesCache map[int]discogs.Release
-	LastPage            int `json:"last_page"`
+	LastPage            int          `json:"last_page"`
 	DidInit             sql.NullBool `json:"did_init"`
 	MaxPages            int
 }
@@ -56,8 +62,10 @@ func getApp() (App, error) {
 	})
 
 	// Discogs
+	discogsToken := os.Getenv("DG_TOKEN")
 	discogsClient, err := discogs.New(&discogs.Options{
 		UserAgent: "Mirror.FM",
+		Token:     discogsToken,
 	})
 	if err != nil {
 		return App{}, errors.Wrap(err, "failed to set up discogs client")
@@ -67,43 +75,51 @@ func getApp() (App, error) {
 		Discogs:             discogsClient,
 		DynamoDB:            dynamoClient,
 		DynamoDBTracksTable: "mirrorfm_dg_tracks",
+		DynamoDBCursorTable: "mirrorfm_cursors",
 		SQLDriver:           sqlDriver,
-		Backoff:             backoff.WithMaxRetries(backoff.NewExponentialBackOff(),100),
+		Backoff:             backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 100),
 	}, nil
 }
 
-func Handler(ctx context.Context) error {
+func Handler(ctx context.Context, evt events.SNSEvent) error {
 	app, err := getApp()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to start up app")
 	}
 
-	labelId := 77423
+	var rowId int
+	labelId, rowId, err := app.findNextLabelToProcess(evt)
+	if err != nil {
+		return errors.Wrap(err, "failed to find next label to process")
+	}
 
 	label, err := app.GetLabel(labelId)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to retrieve label")
 	}
 
-	err = app.UpdateLabelWithAddedDatetime(label)
-	if err != nil {
-		return err
-	}
+	//fmt.Println(label.Images[0].ResourceURL)
+	//dstImageFit := imaging.Fit(srcImage, 800, 600, imaging.Lanczos)
+
+	//err = app.UpdateLabelWithAddedDatetime(label)
+	//if err != nil {
+	//	return errors.Wrap(err, "failed to update label with added datetime")
+	//}
 
 	localLabel, err := app.GetLabelInfo(label.ID)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get label info")
 	}
 
 	for {
 		releases, err := app.GetLabelReleases(localLabel.LastPage, labelId)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to get label releases")
 		}
 
 		localLabel.MaxPages = releases.Pagination.Pages
 
-		log.Printf("Page %d/%d\n", localLabel.LastPage + 1, localLabel.MaxPages + 1)
+		log.Printf("Page %d/%d\n", localLabel.LastPage+1, localLabel.MaxPages+1)
 
 		uniqueMasterReleases, skipped, err := app.populateUniqueMasterReleases(releases, localLabel)
 		if err != nil {
@@ -131,7 +147,37 @@ func Handler(ctx context.Context) error {
 		}
 	}
 
+	if rowId > 0 {
+		return app.SaveCursor("from_discogs_last_successful_label", rowId)
+	}
+
 	return nil
+}
+
+func (client *App) findNextLabelToProcess(evt events.SNSEvent) (int, int, error) {
+	if len(evt.Records) > 0 {
+		labelIdStr := evt.Records[0].SNS.Message
+
+		res, err := strconv.Atoi(labelIdStr)
+		if err != nil {
+			return 0, 0, errors.Wrap(err, "failed to convert label LabelID to int")
+		}
+
+		return res, 0, nil
+	}
+
+	cursor, err := client.GetCursor("from_discogs_last_successful_label")
+	if err != nil {
+		return 0, 0, errors.Wrap(err, "failed to retrieve cursor")
+	}
+	fmt.Printf("last was %d\n", cursor)
+
+	label, err := client.GetNextLabel(cursor)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return label.LabelID, label.ID, nil
 }
 
 func (client *App) populateUniqueMasterReleases(releases *discogs.LabelReleases, localLabel LocalLabel) ([]int, int, error) {
@@ -169,7 +215,7 @@ func (client *App) populateUniqueMasterReleases(releases *discogs.LabelReleases,
 
 func (client *App) persistReleasesTracks(localLabel LocalLabel, uniqueMasterReleases []int) error {
 	for _, masterReleaseId := range uniqueMasterReleases {
-		if alreadyStored, err := client.isMasterReleaseAlreadyStored(localLabel.ID, masterReleaseId); err != nil {
+		if alreadyStored, err := client.isMasterReleaseAlreadyStored(localLabel.LabelID, masterReleaseId); err != nil {
 			return err
 		} else if alreadyStored {
 			fmt.Println("Already stored")
@@ -177,7 +223,7 @@ func (client *App) persistReleasesTracks(localLabel LocalLabel, uniqueMasterRele
 		}
 
 		fmt.Printf("tracks in %d %d\n", masterReleaseId, len(localLabel.MasterReleasesCache[masterReleaseId].Tracklist))
-		err := client.AddTracks(localLabel.MasterReleasesCache[masterReleaseId], masterReleaseId, localLabel.ID)
+		err := client.AddTracks(localLabel.MasterReleasesCache[masterReleaseId], masterReleaseId, localLabel.LabelID)
 		if err != nil {
 			return err
 		}
@@ -191,7 +237,7 @@ func (client *App) persistReleasesTracks(localLabel LocalLabel, uniqueMasterRele
 
 func isReleaseAlreadyStored(releaseId int, localLabel LocalLabel) bool {
 	// Here we assume that old releases that were recently added to a label
-	// will have a new/high release ID.
+	// will have a new/high release LabelID.
 	return localLabel.DidInit.Bool && releaseId <= localLabel.HighestReleaseID
 }
 
@@ -199,7 +245,16 @@ func main() {
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
 		lambda.Start(Handler)
 	} else {
-		err := Handler(context.TODO())
+		// Also handle loop
+		err := Handler(context.TODO(), events.SNSEvent{
+			Records: []events.SNSEventRecord{
+				//{
+				//	SNS: events.SNSEntity{
+				//		Message: "720419", // 77423
+				//	},
+				//},
+			},
+		})
 		if err != nil {
 			fmt.Println(err.Error())
 		}

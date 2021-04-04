@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/irlndts/go-discogs"
+	"github.com/pkg/errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,16 +22,19 @@ func (client *App) GetRelease(id int) (resp *discogs.Release, err error) {
 		return nil
 	}, client.Backoff)
 	client.Backoff.Reset()
+	if resp == nil {
+		err = errors.New("retries exceeded")
+	}
 	return
 }
 
 func (client *App) GetLabelReleases(page, label int) (resp *discogs.LabelReleases, err error) {
-	_ = backoff.Retry(func() error {
+	err = backoff.Retry(func() error {
 		resp, err = client.Discogs.LabelReleases(label, &discogs.Pagination{
-			Sort: "year",
+			Sort:      "year",
 			SortOrder: "asc",
-			PerPage: 25,
-			Page: page,
+			PerPage:   25,
+			Page:      page,
 		})
 		if err != nil && strings.Contains(err.Error(), RetryCode) {
 			return err // retry
@@ -38,6 +42,9 @@ func (client *App) GetLabelReleases(page, label int) (resp *discogs.LabelRelease
 		return nil
 	}, client.Backoff)
 	client.Backoff.Reset()
+	if resp == nil {
+		err = errors.New("retries exceeded")
+	}
 	return
 }
 
@@ -50,5 +57,8 @@ func (client *App) GetLabel(label int) (resp *discogs.Label, err error) {
 		return nil
 	}, client.Backoff)
 	client.Backoff.Reset()
+	if resp == nil {
+		err = errors.New("retries exceeded")
+	}
 	return
 }

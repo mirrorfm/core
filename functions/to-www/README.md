@@ -1,6 +1,5 @@
-    export DB_USERNAME=
-    export DB_PASSWORD=
-    export DB_NAME=
-    export DB_HOST=
+API for https://mirror.fm
 
-    go run main.go
+    make setup
+    make to-www
+    make deploy-to-www

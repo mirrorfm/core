@@ -24,6 +24,9 @@ from boto3.dynamodb.types import TypeDeserializer
 from boto3.dynamodb.conditions import Key
 import boto3
 import pymysql
+import random
+import re
+
 
 name = os.getenv('DB_USERNAME')
 password = os.getenv('DB_PASSWORD')
@@ -95,6 +98,7 @@ cats = {
         "duplicates_table": dynamodb.Table('mirrorfm_yt_duplicates'),
         "entity_id": "channel_id",
         "host_entity_id": "yt_channel_id",
+        "host_entity_id_type": str,
         "entity_name": "channel_name",
         "track_id": "yt_track_id",
         "track_name": "yt_track_name",
@@ -104,7 +108,9 @@ cats = {
         "playlist_table": "yt_playlists",
         "cursor_start_track_key": "start_yt_track_key",
         "cursor_last_successful_entity": "to_spotify_last_successful_channel",
-        "description": "YouTube channel"
+        "description": "YouTube channel",
+        "track_parsing_needed": True,
+        "duplicate_spotify_id": "yt_track_id"
     },
     DG_HOST: {
         "key": DG_HOST,
@@ -112,6 +118,7 @@ cats = {
         "duplicates_table": dynamodb.Table('mirrorfm_dg_duplicates'),
         "entity_id": "label_id",
         "host_entity_id": "dg_label_id",
+        "host_entity_id_type": int,
         "entity_name": "label_name",
         "track_id": "dg_track_id",
         "track_name": "dg_track_name",
@@ -121,7 +128,9 @@ cats = {
         "playlist_table": "dg_playlists",
         "cursor_start_track_key": "start_dg_track_key",
         "cursor_last_successful_entity": "to_spotify_last_successful_label",
-        "description": "Discogs label"
+        "description": "Discogs label",
+        "track_parsing_needed": False,
+        "duplicate_spotify_id": "spotify_uri"
     }
 }
 
@@ -205,7 +214,7 @@ def get_spotify():
     return spotipy.Spotify(auth=token_info['access_token'])
 
 
-def find_on_spotify(sp, track_name):
+def find_on_spotify_by_artist_track(sp, track_name):
     artist_and_track = split_artist_track(track_name)
     if artist_and_track is not None and len(artist_and_track) > 1:
         query = 'track:"{0[1]}"+artist:"{0[0][0]}"'.format(artist_and_track)
@@ -217,6 +226,24 @@ def find_on_spotify(sp, track_name):
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
         # print("[x]", track_name, artist_and_track)
+    except Exception as e:
+        raise e
+
+
+def cleanse_artist(artist):
+    # https://regex101.com/r/H9m4pk/1
+    # could be improved
+    return re.sub(r"\(.*\)", "", artist).strip()
+
+
+def find_on_spotify_by_track_and_artist(sp, track_name, artist):
+    artist = cleanse_artist(artist)
+    query = 'track:"{0}"+artist:"{1}"'.format(track_name, artist)
+    try:
+        results = sp.search(query, limit=1, type='track')
+        for _, spotify_track in enumerate(results['tracks']['items']):
+            return spotify_track
+        print("[x]", artist, "-", track_name)
     except Exception as e:
         raise e
 
@@ -247,7 +274,6 @@ def create_playlist(sp, entity_id, num=1):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE " + cats[current_host]['entity_id'] + "='%s'" % entity_id)
     row = cursor.fetchone()
-    print(row)
 
     playlist_name = row[cats[current_host]['entity_name']]
     if num > 1:
@@ -282,7 +308,7 @@ def is_track_duplicate(entity_id, track_spotify_uri):
     return 'Item' in table.get_item(
         Key={
             cats[current_host]['host_entity_id']: entity_id,
-            cats[current_host]['track_id']: track_spotify_uri
+            cats[current_host]['duplicate_spotify_id']: track_spotify_uri
         }
     )
 
@@ -292,7 +318,7 @@ def add_track_to_duplicate_index(entity_id, track_spotify_uri, spotify_playlist)
     table.put_item(
         Item={
             cats[current_host]['host_entity_id']: entity_id,
-            cats[current_host]['track_id']: track_spotify_uri,
+            cats[current_host]['duplicate_spotify_id']: track_spotify_uri,
             'spotify_playlist': spotify_playlist
         }
     )
@@ -353,8 +379,29 @@ def find_genres(sp, info, new_track_genres):
     return song_genres
 
 
+def get_first_artist(record):
+    if "artistssort" in record:
+        if record["artistssort"] == "Various":
+            return record["artists"][0]["name"]
+        return record["artistssort"]
+    if "artists" in record:
+        return record["artists"][0]["name"]
+    if "release_artistssort" in record and record["release_artistssort"] == "Various":
+        return record["release_artists"][0]["name"]
+    return record["release_artistssort"]
+
+
 def spotify_lookup(sp, record, new_track_genres):
-    spotify_track_info = find_on_spotify(sp, record[ cats[current_host]['track_name']])
+    if 'title' in record and record['title'] is None or 'title' not in record:
+        # Discogs can have None title
+        return False
+    if cats[current_host]['track_parsing_needed']:
+        track_name = record[cats[current_host]['track_name']]
+        spotify_track_info = find_on_spotify_by_artist_track(sp, track_name)
+    else:
+        artist = get_first_artist(record)
+        spotify_track_info = find_on_spotify_by_track_and_artist(sp, record['title'], artist)
+        track_name = artist + " - " + record['title']
     tracks_table = cats[current_host]['tracks_table']
 
     # Safety duplicate check needed because
@@ -369,7 +416,7 @@ def spotify_lookup(sp, record, new_track_genres):
             spotify_track_info['name'],
             "\n",
             "\t\t\t\t\t",
-            record[cats[current_host]['track_name']])
+            track_name)
         genres = find_genres(sp, spotify_track_info, new_track_genres)
         spotify_playlist = add_track_to_spotify_playlist(
             sp, spotify_track_info['uri'], record[cats[current_host]['host_entity_id']])
@@ -383,13 +430,13 @@ def spotify_lookup(sp, record, new_track_genres):
                 spotify_found_time = :spotify_found_time,\
                 %s = :%s,\
                 spotify_track_info = :spotify_track_info,\
-                genres = :genres" % cats[current_host]['track_name'],
+                genres = :genres" % (cats[current_host]['track_name'], cats[current_host]['track_name']),
             ExpressionAttributeValues={
                 ':spotify_uri': spotify_track_info['uri'],
                 ':spotify_playlist': spotify_playlist,
                 ':genres': genres,
                 ':spotify_found_time': datetime.now(timezone.utc).isoformat(),
-                ':%s' % cats[current_host]['track_name']: record[cats[current_host]['track_name']],
+                ':%s' % cats[current_host]['track_name']: track_name,
                 ':spotify_track_info': spotify_track_info
             }
         )
@@ -401,15 +448,13 @@ def get_next_entity():
     if 'Item' in cursor and cursor['Item']['value']:
         last_entity_id = int(cursor['Item']['value'])
     else:
-        last_entity_id = 1
-
+        last_entity_id = 0
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_entity_id))
     return cursor.fetchone()
 
 
 def save_cursors(just_processed_tracks, to_spotify_last_successful_entity):
-    print(cats[current_host]['cursor_last_successful_entity'], to_spotify_last_successful_entity)
     if 'LastEvaluatedKey' in just_processed_tracks:
         print('LastEvaluatedKey in just_processed_tracks')
         set_cursor(cats[current_host]['cursor_start_track_key'], just_processed_tracks['LastEvaluatedKey'])
@@ -429,22 +474,30 @@ def save_cursors(just_processed_tracks, to_spotify_last_successful_entity):
 def get_next_tracks(entity_id):
     tracks_table = cats[current_host]['tracks_table']
     cursor = get_cursor(cats[current_host]['cursor_start_track_key'])
+
+    host_entity_id = cats[current_host]['host_entity_id']
+    host_entity_id_type = cats[current_host]['host_entity_id_type']
+
+    if host_entity_id_type == int:
+        condition_expression = Key(host_entity_id).eq(int(entity_id))
+    else:
+        condition_expression = Key(host_entity_id).eq(entity_id)
+
     if 'Item' in cursor:
         print(
             "Starting from track",
             cursor['Item']['value'][cats[current_host]['track_composite']])
-        print(entity_id)
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
             ExclusiveStartKey=cursor['Item']['value'],
-            KeyConditionExpression=Key(cats[current_host]['host_entity_id']).eq(entity_id))
+            KeyConditionExpression=condition_expression)
     else:
         print("Starting from first track")
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
-            KeyConditionExpression=Key(cats[current_host]['host_entity_id']).eq(entity_id))
+            KeyConditionExpression=condition_expression)
 
 
 def deserialize_record(record):
@@ -468,13 +521,33 @@ def update_playlist_description(sp, pl_id, channel_aid):
     sp.playlist_change_details(pl_id, description=desc)
 
 
+class HostNotFound(Exception):
+    pass
+
+
 def detect_host(event):
-    return YT_HOST
+    for record in event['Records']:
+        record = record['dynamodb']
+        if 'Keys' in record:
+            keys = record['Keys']
+            for k in cats:
+                cat = cats[k]
+                if cat['host_entity_id'] in keys:
+                    cat_key = cat['key']
+                    print("detected host %s" % cat_key)
+                    return cat_key
+    raise HostNotFound
+
+
+def random_host():
+    rand_boolean = bool(random.getrandbits(1))
+    rand_host = YT_HOST if rand_boolean else DG_HOST
+    print("random host %s" % rand_host)
+    return rand_host
 
 
 def handle(event, context):
     global current_host
-    current_host = detect_host(event)
 
     new_track_genres = []
 
@@ -482,6 +555,8 @@ def handle(event, context):
     total_added = total_searched = 0
 
     if 'Records' in event and len(event['Records']) > 0:
+        current_host = detect_host(event)
+
         # New tracks
         print("Process %d tracks just added to DynamoDB" % len(event['Records']))
         for record in event['Records']:
@@ -490,20 +565,27 @@ def handle(event, context):
                 total_searched += 1
                 if spotify_lookup(sp, deserialize_record(record), new_track_genres):
                     total_added += 1
-        entity_id = event['Records'][0]['NewImage'][cats[current_host]['host_entity_id']]['S']
+        if cats[current_host]['host_entity_id_type'] == str:
+            entity_id_type = "S"
+        else:
+            entity_id_type = "N"
+        entity_id = event['Records'][0]['dynamodb']['NewImage'][cats[current_host]['host_entity_id']][entity_id_type]
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE " + cats[current_host]['entity_id'] + "=%s", entity_id)
         entity = cursor.fetchone()
         entity_aid = entity['id']
         entity_name = entity[cats[current_host]['entity_name']]
     else:
+        current_host = random_host()
+
         # Rediscover tracks
         channel_to_process = get_next_entity()
+        print(channel_to_process)
         entity_aid = channel_to_process['id']
         entity_id = channel_to_process[cats[current_host]['entity_id']]
 
         # Channel might not have a name yet if it has just been added
-        entity_name = channel_to_process['channel_name']
+        entity_name = channel_to_process[cats[current_host]['entity_name']]
         print("Rediscovering entity", entity_name or entity_id)
 
         tracks_to_process = get_next_tracks(entity_id)
@@ -565,7 +647,33 @@ if __name__ == "__main__":
     handle({}, {})
 
     # w/o Spotify URI -> add
-    # handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'yt_track_name': {u'S': u'eminem collapse'}, u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})
+    # handle({
+    #     u'Records': [
+    #         {
+    #             u'eventID': u'7d3a0eeea532a920df49b37f63912dd7',
+    #             u'eventVersion': u'1.1',
+    #             u'dynamodb': {
+    #                 u'SequenceNumber': u'490449600000000013395897450',
+    #                 u'Keys': {
+    #                     u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'},
+    #                     u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}
+    #                 },
+    #                 u'SizeBytes': 103,
+    #                 u'NewImage': {
+    #                     u'yt_track_name': {u'S': u'eminem collapse'},
+    #                     u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'},
+    #                     u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}
+    #                 },
+    #                 u'ApproximateCreationDateTime': 1558178610.0,
+    #                 u'StreamViewType': u'NEW_AND_OLD_IMAGES'
+    #             },
+    #             u'awsRegion': u'eu-west-1',
+    #             u'eventName': u'INSERT',
+    #             u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102',
+    #             u'eventSource': u'aws:dynamodb'
+    #         }
+    #     ]
+    # }, {})
 
     # w/  Spotify URI -> don't add
     # handle({u'Records': [{u'eventID': u'7d3a0eeea532a920df49b37f63912dd7', u'eventVersion': u'1.1', u'dynamodb': {u'SequenceNumber': u'490449600000000013395897450', u'Keys': {u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'SizeBytes': 103, u'NewImage': {u'yt_track_name': {u'S': u'eminem collapse'}, u'spotify_uri': {u'S': u'hi'}, u'yt_channel_id': {u'S': u'UCcHqeJgEjy3EJTyiXANSp6g'}, u'yt_track_id': {u'S': u'_fQ9DhnGo5Y'}}, u'ApproximateCreationDateTime': 1558178610.0, u'StreamViewType': u'NEW_AND_OLD_IMAGES'}, u'awsRegion': u'eu-west-1', u'eventName': u'INSERT', u'eventSourceARN': u'arn:aws:dynamodb:eu-west-1:705440408593:table/any_tracks/stream/2019-05-06T10:02:12.102', u'eventSource': u'aws:dynamodb'}]}, {})

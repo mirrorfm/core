@@ -136,11 +136,8 @@ def handle(event, context):
     last_upload_datetime = None
     old_yt_count_tracks = 0
 
-    print("Event:", event)
-
     if 'Records' in event:
         # A channel_id was added to the `yt_channels` table
-        print(event)
         channel_id = event['Records'][0]['Sns']['Message']
         channel = get_channel(channel_id)
     else:

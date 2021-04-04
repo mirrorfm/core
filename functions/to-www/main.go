@@ -29,10 +29,10 @@ type Client struct {
 }
 
 const (
-	youtubeChannelsLimit = 500
+	youtubeChannelsLimit      = 500
 	youtubeChannelsGenreLimit = 4
-	homeChannelsLimit = 6
-	homeChannelsGenreLimit = 20
+	homeChannelsLimit         = 6
+	homeChannelsGenreLimit    = 20
 )
 
 var ginLambda *ginadapter.GinLambda
@@ -167,29 +167,33 @@ type Genre struct {
 }
 
 type YoutubeChannel struct {
-	ID                 int       `json:"id"`
-	ChannelId          string    `json:"channel_id"`
-	ChannelName        string    `json:"channel_name"`
-	CountTracks        int       `json:"count_tracks"`
-	FoundTracks        int       `json:"found_tracks"`
-	LastUploadDatetime time.Time `json:"last_upload_datetime"`
-	ThumbnailMedium    string    `json:"thumbnail_medium"`
-	UploadPlaylistId   string    `json:"upload_playlist_id"`
+	ID                 int          `json:"id"`
+	ChannelId          string       `json:"channel_id"`
+	ChannelName        string       `json:"channel_name"`
+	CountTracks        int          `json:"count_tracks"`
+	FoundTracks        int          `json:"found_tracks"`
+	LastUploadDatetime time.Time    `json:"last_upload_datetime"`
+	ThumbnailMedium    string       `json:"thumbnail_medium"`
+	UploadPlaylistId   string       `json:"upload_playlist_id"`
 	TerminatedDatetime sql.NullTime `json:"terminated_datetime"`
-	AddedDatetime 	   sql.NullTime `json:"added_datetime"`
-	PlaylistId         string    `json:"playlist_id"`
-	CountFollowers     int       `json:"count_followers"`
-	Genres             []Genre   `json:"genres"`
-	LastFoundTime      time.Time `json:"last_found_time"`
+	AddedDatetime      sql.NullTime `json:"added_datetime"`
+	PlaylistId         string       `json:"playlist_id"`
+	CountFollowers     int          `json:"count_followers"`
+	Genres             []Genre      `json:"genres"`
+	LastFoundTime      time.Time    `json:"last_found_time"`
 }
 
 type Event struct {
 	Host            string `json:"host"`
 	Timestamp       string `json:"timestamp"`
 	Added           string `json:"added"`
-	ChannelID       string `json:"channel_id" dynamodbav:"channel_id"`
 	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
-	ChannelName     string `json:"channel_name" dynamodbav:"channel_name"`
+}
+
+type YouTubeEvent struct {
+	ChannelID   string `json:"channel_id" dynamodbav:"channel_id"`
+	ChannelName string `json:"channel_name" dynamodbav:"channel_name"`
+	Event
 }
 
 func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
@@ -350,7 +354,7 @@ func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err err
 	return ch, err
 }
 
-func (c *Client) getEvents(count int) (events []Event, err error) {
+func (c *Client) getEvents(count int) (events []YouTubeEvent, err error) {
 	queryInput := &dynamodb.QueryInput{
 		KeyConditions: map[string]*dynamodb.Condition{
 			"host": {

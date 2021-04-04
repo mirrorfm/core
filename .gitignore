@@ -1,5 +1,5 @@
-env/
-env.json
+env*
 project.json
 .cache*
 *.pyc
+./node_modules
