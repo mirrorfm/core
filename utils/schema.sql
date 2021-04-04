@@ -1,3 +1,15 @@
+create table dg_genres
+(
+    id           int auto_increment
+        primary key,
+    dg_label_id  int         not null,
+    genre_name   varchar(64) not null,
+    count        int         not null,
+    last_updated datetime    null,
+    constraint dg_genres_dg_label_id_genre_name_uindex
+        unique (dg_label_id, genre_name)
+);
+
 create table dg_labels
 (
     id                    int auto_increment
@@ -17,6 +29,21 @@ create table dg_labels
     constraint dg_labels_label_id_uindex
         unique (label_id)
 );
+
+create table dg_playlists
+(
+    label_id         varchar(256) not null,
+    num              int          not null,
+    count_followers  int          not null,
+    found_tracks     int          not null,
+    last_found_time  datetime     not null,
+    last_search_time datetime     not null,
+    spotify_playlist varchar(255) not null,
+    primary key (label_id, num)
+);
+
+create index dg_playlists_label_id_num_index
+    on dg_playlists (label_id, num);
 
 create table yt_channels
 (
