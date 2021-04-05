@@ -100,7 +100,7 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 
 	err = app.UpdateLabelWithThumbnail(label)
 	if err != nil {
-		return errors.Wrap(err, "failed to update label with images")
+		return errors.Wrap(err, "failed to update label with thumbnail")
 	}
 
 	localLabel, err := app.GetLabelInfo(label.ID)

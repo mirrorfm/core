@@ -8,12 +8,15 @@ import (
 )
 
 func (client *App) UpdateLabelWithThumbnail(label *discogs.Label) error {
-	_, err := client.SQLDriver.Exec(fmt.Sprintf(`
+	if len(label.Images) > 0 {
+		_, err := client.SQLDriver.Exec(fmt.Sprintf(`
 		UPDATE dg_labels
 		SET thumbnail_medium = ?
 		WHERE label_id = ?
 	`), label.Images[0].ResourceURL, label.ID)
-	return errors.Wrap(err, "failed to update label with thumbnail")
+		return errors.Wrap(err, "failed to update label with thumbnail")
+	}
+	return nil
 }
 
 func (client *App) GetLabelInfo(labelId int) (LocalLabel, error) {
