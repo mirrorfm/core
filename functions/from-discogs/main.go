@@ -98,13 +98,10 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 		return errors.Wrap(err, "failed to retrieve label")
 	}
 
-	//fmt.Println(label.Images[0].ResourceURL)
-	//dstImageFit := imaging.Fit(srcImage, 800, 600, imaging.Lanczos)
-
-	//err = app.UpdateLabelWithAddedDatetime(label)
-	//if err != nil {
-	//	return errors.Wrap(err, "failed to update label with added datetime")
-	//}
+	err = app.UpdateLabelWithThumbnail(label)
+	if err != nil {
+		return errors.Wrap(err, "failed to update label with images")
+	}
 
 	localLabel, err := app.GetLabelInfo(label.ID)
 	if err != nil {

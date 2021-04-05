@@ -26,7 +26,8 @@ import boto3
 import pymysql
 import random
 import re
-
+from PIL import Image
+from io import BytesIO
 
 name = os.getenv('DB_USERNAME')
 password = os.getenv('DB_PASSWORD')
@@ -110,7 +111,8 @@ cats = {
         "cursor_last_successful_entity": "to_spotify_last_successful_channel",
         "description": "YouTube channel",
         "track_parsing_needed": True,
-        "duplicate_spotify_id": "yt_track_id"
+        "duplicate_spotify_id": "yt_track_id",
+        "thumbnail_needs_resize": False
     },
     DG_HOST: {
         "key": DG_HOST,
@@ -130,7 +132,8 @@ cats = {
         "cursor_last_successful_entity": "to_spotify_last_successful_label",
         "description": "Discogs label",
         "track_parsing_needed": False,
-        "duplicate_spotify_id": "spotify_uri"
+        "duplicate_spotify_id": "spotify_uri",
+        "thumbnail_needs_resize": True,
     }
 }
 
@@ -257,17 +260,26 @@ def get_last_playlist(entity_id):
     return [playlist, playlist['num']]  # full item, num
 
 
+def get_as_base64(url):
+    return base64.b64encode(requests.get(url).content).decode("utf-8")
+
+
+def resize_as_base64(url):
+    im = Image.open(requests.get(url, stream=True).raw)
+    new_image = im.resize((300, 300))
+    buffered = BytesIO()
+    new_image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue())
+
+
 def add_channel_cover_to_playlist(sp, entity_id, playlist_id):
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM ' + cats[current_host]['entity_table'] + ' WHERE ' + cats[current_host]['entity_id'] + '="%s"' % entity_id)
     row = cursor.fetchone()
     if row:
-        sp.playlist_upload_cover_image(
-            playlist_id, get_as_base64(row['thumbnail_medium']))
-
-
-def get_as_base64(url):
-    return base64.b64encode(requests.get(url).content).decode("utf-8")
+        thumbnail = row['thumbnail_medium']
+        b64 = get_as_base64(thumbnail) if cats[current_host]['thumbnail_needs_resize'] else resize_as_base64(thumbnail)
+        sp.playlist_upload_cover_image(playlist_id, b64)
 
 
 def create_playlist(sp, entity_id, num=1):
@@ -392,13 +404,13 @@ def get_first_artist(record):
 
 
 def spotify_lookup(sp, record, new_track_genres):
-    if 'title' in record and record['title'] is None or 'title' not in record:
-        # Discogs can have None title
-        return False
     if cats[current_host]['track_parsing_needed']:
         track_name = record[cats[current_host]['track_name']]
         spotify_track_info = find_on_spotify_by_artist_track(sp, track_name)
     else:
+        if 'title' in record and record['title'] is None or 'title' not in record:
+            # Discogs can have None title
+            return False
         artist = get_first_artist(record)
         spotify_track_info = find_on_spotify_by_track_and_artist(sp, record['title'], artist)
         track_name = artist + " - " + record['title']

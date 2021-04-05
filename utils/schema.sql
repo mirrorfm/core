@@ -18,7 +18,7 @@ create table dg_labels
     label_name            varchar(256)         not null,
     label_tracks          int        default 0 null,
     last_release_datetime datetime             null,
-    images                json                 null,
+    thumbnail_medium      varchar(256)         null,
     added_datetime        datetime             null,
     updated_datetime      datetime             null,
     highest_dg_release    int        default 0 null,
@@ -94,4 +94,3 @@ create table yt_playlists
 
 create index yt_playlists_channel_id_num_index
     on yt_playlists (channel_id, num);
-

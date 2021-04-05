@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"github.com/irlndts/go-discogs"
 	"github.com/pkg/errors"
-	"time"
 )
 
-func (client *App) UpdateLabelWithAddedDatetime(label *discogs.Label) error {
+func (client *App) UpdateLabelWithThumbnail(label *discogs.Label) error {
 	_, err := client.SQLDriver.Exec(fmt.Sprintf(`
 		UPDATE dg_labels
-		SET
-			label_name = ?,
-			added_datetime = ?
+		SET thumbnail_medium = ?
 		WHERE label_id = ?
-	`), label.Name, time.Now(), label.ID)
-	return errors.Wrap(err, "failed to update label with added datetime")
+	`), label.Images[0].ResourceURL, label.ID)
+	return errors.Wrap(err, "failed to update label with thumbnail")
 }
 
 func (client *App) GetLabelInfo(labelId int) (LocalLabel, error) {
