@@ -23,3 +23,4 @@ This repository contains the code for the main background processes.
  - [`from-youtube`](functions/from-youtube/)
  - [`to-spotify`](functions/to-spotify/)
  - [`to-www`](functions/to-www/)
+ - [`sort-playlists`](functions/sort-playlists/)

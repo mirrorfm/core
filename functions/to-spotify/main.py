@@ -26,8 +26,6 @@ import boto3
 import pymysql
 import random
 import re
-from PIL import Image
-from io import BytesIO
 
 name = os.getenv('DB_USERNAME')
 password = os.getenv('DB_PASSWORD')
@@ -228,7 +226,7 @@ def find_on_spotify_by_artist_track(sp, track_name):
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
-        # print("[x]", track_name, artist_and_track)
+        # print("[x]", track_name, "-", artist_and_track)
     except Exception as e:
         raise e
 
@@ -246,7 +244,7 @@ def find_on_spotify_by_track_and_artist(sp, track_name, artist):
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
             return spotify_track
-        print("[x]", artist, "-", track_name)
+        # print("[x]", artist, "-", track_name)
     except Exception as e:
         raise e
 
@@ -265,6 +263,9 @@ def get_as_base64(url):
 
 
 def resize_as_base64(url):
+    from PIL import Image
+    from io import BytesIO
+
     im = Image.open(requests.get(url, stream=True).raw)
     new_image = im.resize((300, 300))
     buffered = BytesIO()
@@ -462,7 +463,7 @@ def get_next_entity():
     else:
         last_entity_id = 0
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_entity_id))
+    cursor.execute("SELECT * FROM " + cats[current_host]['entity_table'] + " WHERE (id > %s or id = 1) order by id = 1, id limit 1" % str(last_entity_id))
     return cursor.fetchone()
 
 
@@ -558,7 +559,7 @@ def random_host():
     return rand_host
 
 
-def handle(event, context):
+def handle(event):
     global current_host
 
     new_track_genres = []
@@ -592,7 +593,6 @@ def handle(event, context):
 
         # Rediscover tracks
         channel_to_process = get_next_entity()
-        print(channel_to_process)
         entity_aid = channel_to_process['id']
         entity_id = channel_to_process[cats[current_host]['entity_id']]
 
@@ -607,6 +607,7 @@ def handle(event, context):
                 total_searched += 1
                 if spotify_lookup(sp, record, new_track_genres):
                     total_added += 1
+
         save_cursors(tracks_to_process, entity_aid)
 
     if total_searched > 0:

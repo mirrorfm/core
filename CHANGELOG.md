@@ -1,3 +1,9 @@
+# 2021-04-11
+
+## Added
+
+- [sort-playlists] Sort Spotify playlists by total followers
+
 # 2020-08-12
 
 ## Added

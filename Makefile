@@ -1,6 +1,9 @@
 setup:
 	npm install json-to-env -g
 
+setup-to-spotify:
+	cd functions/to-spotify && pip3 install --user -r requirements.txt
+
 from-github:
 	cd functions/from-github && json-to-env ./env.json ./env.sh
 	cd functions/from-github && source ./env.sh && rm ./env.sh && go run *.go
@@ -15,12 +18,15 @@ from-youtube:
 
 to-spotify:
 	cd functions/to-spotify && json-to-env ./env.json ./env.sh
-	cd functions/to-spotify && pip3 install --user -r requirements.txt
 	cd functions/to-spotify && source ./env.sh && rm ./env.sh && python3 main.py
 
 to-www:
 	cd functions/to-www && json-to-env ./env.json ./env.sh
 	cd functions/to-www && source ./env.sh && rm ./env.sh && go run *.go
+
+sort-playlists:
+	cd functions/sort-playlists && json-to-env ./env.json ./env.sh
+	cd functions/sort-playlists && source ./env.sh && rm ./env.sh && go run *.go
 
 deploy-from-discogs:
 	apex build from-discogs >/dev/null
@@ -41,3 +47,7 @@ deploy-to-spotify:
 deploy-from-youtube:
 	apex build from-youtube >/dev/null
 	apex deploy from-youtube --region eu-west-1 -ldebug --env-file ./functions/from-youtube/env.json
+
+deploy-sort-playlists:
+	apex build sort-playlists >/dev/null
+	apex deploy sort-playlists --region eu-west-1 -ldebug --env-file ./functions/sort-playlists/env.json
