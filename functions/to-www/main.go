@@ -4,23 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
-	_ "github.com/go-sql-driver/mysql"
-	"log"
-	"os"
-	"sort"
-	"strconv"
-	"sync"
-	"time"
-
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/awslabs/aws-lambda-go-api-proxy/gin"
-	"github.com/gin-gonic/gin"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/awslabs/aws-lambda-go-api-proxy/gin"
+	"github.com/gin-gonic/gin"
+	_ "github.com/go-sql-driver/mysql"
+	"log"
+	"os"
 )
 
 type Client struct {
@@ -106,6 +99,31 @@ func init() {
 		})
 	})
 
+	r.GET("/labels", func(c *gin.Context) {
+		totalTracks, err := client.getTableCount(client.DynamoDBTracksTable)
+		handleAPIError(c, err)
+		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
+		handleAPIError(c, err)
+		labels, err := client.getDiscogsLabels("l.id", "ASC", youtubeChannelsLimit, youtubeChannelsGenreLimit)
+		handleAPIError(c, err)
+
+		c.JSON(200, gin.H{
+			"discogs":      labels,
+			"total_labels": len(labels),
+			"total_tracks": totalTracks,
+			"found_tracks": foundTracks,
+		})
+	})
+
+	r.GET("/labels/:id", func(c *gin.Context) {
+		label, err := client.getDiscogsLabel(c.Param("id"))
+		handleAPIError(c, err)
+
+		c.JSON(200, gin.H{
+			"label": label,
+		})
+	})
+
 	r.GET("/home", func(c *gin.Context) {
 		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
@@ -162,267 +180,4 @@ func handleAPIError(c *gin.Context, err error) {
 			"error": err.Error(),
 		})
 	}
-}
-
-type Genre struct {
-	Name  string `json:"name" dynamodbav:"genre_name"`
-	Count int    `json:"count"`
-}
-
-type YoutubeChannel struct {
-	ID                 int          `json:"id"`
-	ChannelId          string       `json:"channel_id"`
-	ChannelName        string       `json:"channel_name"`
-	CountTracks        int          `json:"count_tracks"`
-	FoundTracks        int          `json:"found_tracks"`
-	LastUploadDatetime time.Time    `json:"last_upload_datetime"`
-	ThumbnailMedium    string       `json:"thumbnail_medium"`
-	UploadPlaylistId   string       `json:"upload_playlist_id"`
-	TerminatedDatetime sql.NullTime `json:"terminated_datetime"`
-	AddedDatetime      sql.NullTime `json:"added_datetime"`
-	PlaylistId         string       `json:"playlist_id"`
-	CountFollowers     int          `json:"count_followers"`
-	Genres             []Genre      `json:"genres"`
-	LastFoundTime      time.Time    `json:"last_found_time"`
-}
-
-type Event struct {
-	Host            string `json:"host"`
-	Timestamp       string `json:"timestamp"`
-	Added           string `json:"added"`
-	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
-	EntityID   		string `json:"entity_id" dynamodbav:"entity_id"`
-	EntityName 		string `json:"entity_name" dynamodbav:"entity_name"`
-}
-
-func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
-	query := fmt.Sprintf(`
-		SELECT
-			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
-			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
-			c.terminated_datetime, c.added_datetime,
-			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
-			p.last_found_time as last_found_time
-		FROM
-			yt_channels as c
-		INNER JOIN
-			yt_playlists p on c.channel_id = p.channel_id
-		GROUP BY id ORDER BY %s %s LIMIT ?`, orderBy, order)
-	selDB, err := c.SQLDriver.Query(query, limit)
-	if err != nil {
-		fmt.Println(err.Error())
-		return res, err
-	}
-
-	var ch YoutubeChannel
-	for selDB.Next() {
-		err = selDB.Scan(
-			&ch.ID,
-			&ch.ChannelId,
-			&ch.ChannelName,
-			&ch.CountTracks,
-			&ch.LastUploadDatetime,
-			&ch.ThumbnailMedium,
-			&ch.UploadPlaylistId,
-			&ch.TerminatedDatetime,
-			&ch.AddedDatetime,
-			&ch.PlaylistId,
-			&ch.FoundTracks,
-			&ch.CountFollowers,
-			&ch.LastFoundTime)
-		if err != nil {
-			return res, err
-		}
-		ch, err := c.populateWithGenres(ch, limitGenres)
-		if err != nil {
-			return res, err
-		}
-		res = append(res, ch)
-	}
-	return res, nil
-}
-
-func (c *Client) getYoutubeChannelsTerminated(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
-	query := fmt.Sprintf(`
-		SELECT
-			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
-			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
-			c.terminated_datetime, c.added_datetime,
-			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
-			p.last_found_time as last_found_time
-		FROM
-			yt_channels as c
-		INNER JOIN
-			yt_playlists p on c.channel_id = p.channel_id
-		WHERE
-			terminated_datetime IS NOT NULL
-		GROUP BY id ORDER BY %s %s LIMIT ?`, orderBy, order)
-	selDB, err := c.SQLDriver.Query(query, limit)
-	if err != nil {
-		fmt.Println(err.Error())
-		return res, err
-	}
-
-	var ch YoutubeChannel
-	for selDB.Next() {
-		err = selDB.Scan(
-			&ch.ID,
-			&ch.ChannelId,
-			&ch.ChannelName,
-			&ch.CountTracks,
-			&ch.LastUploadDatetime,
-			&ch.ThumbnailMedium,
-			&ch.UploadPlaylistId,
-			&ch.TerminatedDatetime,
-			&ch.AddedDatetime,
-			&ch.PlaylistId,
-			&ch.FoundTracks,
-			&ch.CountFollowers,
-			&ch.LastFoundTime)
-		if err != nil {
-			return res, err
-		}
-		ch, err := c.populateWithGenres(ch, limitGenres)
-		if err != nil {
-			return res, err
-		}
-		res = append(res, ch)
-	}
-	return res, nil
-}
-
-func (c *Client) populateWithGenres(channel YoutubeChannel, limitGenres int) (YoutubeChannel, error) {
-	query := fmt.Sprintf(`
-		SELECT genre_name, count
-		FROM yt_genres
-		WHERE yt_channel_id = ?
-		ORDER BY count DESC
-		LIMIT ?`)
-	db, err := c.SQLDriver.Query(query, &channel.ID, limitGenres)
-	if err != nil {
-		fmt.Println(err.Error())
-		return channel, err
-	}
-	var g Genre
-	var genres []Genre
-	for db.Next() {
-		err = db.Scan(&g.Name, &g.Count)
-		if err != nil {
-			return channel, err
-		}
-		genres = append(genres, g)
-	}
-	channel.Genres = genres
-	return channel, nil
-}
-
-func (c *Client) getTableCount(table string) (count *int64, err error) {
-	describeTable := &dynamodb.DescribeTableInput{
-		TableName: aws.String(table),
-	}
-	res, err := c.DynamoDB.DescribeTable(describeTable)
-	if err != nil {
-		return nil, err
-	}
-	return res.Table.ItemCount, nil
-}
-
-func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err error) {
-	selDB := c.SQLDriver.QueryRow(fmt.Sprintf(`
-		SELECT
-		    c.id, c.channel_id, c.channel_name, c.count_tracks, c.last_upload_datetime,
-		    c.thumbnail_medium, c.upload_playlist_id, c.terminated_datetime, c.added_datetime,
-		    p.spotify_playlist, p.found_tracks
-		FROM yt_channels as c
-		INNER JOIN yt_playlists p on c.channel_id = p.channel_id
-		WHERE c.channel_id = ?`), channelId)
-
-	err = selDB.Scan(
-		&ch.ID,
-		&ch.ChannelId,
-		&ch.ChannelName,
-		&ch.CountTracks,
-		&ch.LastUploadDatetime,
-		&ch.ThumbnailMedium,
-		&ch.UploadPlaylistId,
-		&ch.TerminatedDatetime,
-		&ch.AddedDatetime,
-		&ch.PlaylistId,
-		&ch.FoundTracks)
-
-	return ch, err
-}
-
-func (c *Client) getEventsFromType(count int, entity string, ch chan []Event, wg *sync.WaitGroup) error {
-	defer (*wg).Done()
-
-	oneDayAgo := time.Now().Local().Add(- time.Hour).Unix()
-
-	var ev []Event
-	queryInput := &dynamodb.QueryInput{
-		KeyConditions: map[string]*dynamodb.Condition{
-			"host": {
-				ComparisonOperator: aws.String("EQ"),
-				AttributeValueList: []*dynamodb.AttributeValue{
-					{
-						S: aws.String(entity),
-					},
-				},
-			},
-			"timestamp": {
-				ComparisonOperator: aws.String("GE"),
-				AttributeValueList: []*dynamodb.AttributeValue{
-					{
-						N: aws.String(strconv.FormatInt(oneDayAgo, 10)),
-					},
-				},
-			},
-		},
-		Limit:            aws.Int64(int64(count)),
-		ScanIndexForward: aws.Bool(false),
-		TableName:        aws.String(c.DynamoDBEventsTable),
-	}
-
-	result, err := c.DynamoDB.Query(queryInput)
-	if err != nil {
-		fmt.Println("Query API call failed:")
-		fmt.Println(err.Error())
-		return err
-	}
-
-	err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &ev)
-	if err != nil {
-		fmt.Println("Got error unmarshalling events")
-		fmt.Println(err.Error())
-		return err
-	}
-	ch <- ev
-	return nil
-}
-
-func (c *Client) getEvents(count int) (events []Event, err error) {
-	ch := make(chan []Event)
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go c.getEventsFromType(count, "yt", ch, &wg)
-
-	wg.Add(1)
-	go c.getEventsFromType(count, "dg", ch, &wg)
-
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-
-	for entityEvents := range ch {
-		events = append(events, entityEvents...)
-	}
-
-	// Mix both YT and DG events
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp < events[j].Timestamp
-	})
-
-	return events, nil
 }
