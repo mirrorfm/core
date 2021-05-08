@@ -8,6 +8,9 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"log"
 	"os"
+	"sort"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -72,10 +75,10 @@ func init() {
 	}
 
 	r.GET("/events", func(c *gin.Context) {
-		events, _ := client.getEvents(100)
+		lastEvents, _ := client.getEvents(100)
 		handleAPIError(c, err)
 
-		c.JSON(200, events)
+		c.JSON(200, lastEvents)
 	})
 
 	r.GET("/channels", func(c *gin.Context) {
@@ -188,12 +191,8 @@ type Event struct {
 	Timestamp       string `json:"timestamp"`
 	Added           string `json:"added"`
 	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
-}
-
-type YouTubeEvent struct {
-	ChannelID   string `json:"channel_id" dynamodbav:"channel_id"`
-	ChannelName string `json:"channel_name" dynamodbav:"channel_name"`
-	Event
+	EntityID   		string `json:"entity_id" dynamodbav:"entity_id"`
+	EntityName 		string `json:"entity_name" dynamodbav:"entity_name"`
 }
 
 func (c *Client) getYoutubeChannels(orderBy, order string, limit, limitGenres int) (res []YoutubeChannel, err error) {
@@ -354,14 +353,27 @@ func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err err
 	return ch, err
 }
 
-func (c *Client) getEvents(count int) (events []YouTubeEvent, err error) {
+func (c *Client) getEventsFromType(count int, entity string, ch chan []Event, wg *sync.WaitGroup) error {
+	defer (*wg).Done()
+
+	oneDayAgo := time.Now().Local().Add(- time.Hour).Unix()
+
+	var ev []Event
 	queryInput := &dynamodb.QueryInput{
 		KeyConditions: map[string]*dynamodb.Condition{
 			"host": {
 				ComparisonOperator: aws.String("EQ"),
 				AttributeValueList: []*dynamodb.AttributeValue{
 					{
-						S: aws.String("yt"),
+						S: aws.String(entity),
+					},
+				},
+			},
+			"timestamp": {
+				ComparisonOperator: aws.String("GE"),
+				AttributeValueList: []*dynamodb.AttributeValue{
+					{
+						N: aws.String(strconv.FormatInt(oneDayAgo, 10)),
 					},
 				},
 			},
@@ -375,15 +387,42 @@ func (c *Client) getEvents(count int) (events []YouTubeEvent, err error) {
 	if err != nil {
 		fmt.Println("Query API call failed:")
 		fmt.Println(err.Error())
-		return events, err
+		return err
 	}
 
-	err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &events)
+	err = dynamodbattribute.UnmarshalListOfMaps(result.Items, &ev)
 	if err != nil {
 		fmt.Println("Got error unmarshalling events")
 		fmt.Println(err.Error())
-		return events, err
+		return err
 	}
+	ch <- ev
+	return nil
+}
+
+func (c *Client) getEvents(count int) (events []Event, err error) {
+	ch := make(chan []Event)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go c.getEventsFromType(count, "yt", ch, &wg)
+
+	wg.Add(1)
+	go c.getEventsFromType(count, "dg", ch, &wg)
+
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	for entityEvents := range ch {
+		events = append(events, entityEvents...)
+	}
+
+	// Mix both YT and DG events
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp < events[j].Timestamp
+	})
 
 	return events, nil
 }

@@ -559,7 +559,7 @@ def random_host():
     return rand_host
 
 
-def handle(event):
+def handle(event, c):
     global current_host
 
     new_track_genres = []
@@ -642,9 +642,9 @@ def handle(event):
                     'timestamp': int(time.time()),
                     'added': int(total_added),
                     'genres': playlist_genres,
-                    cats[current_host]['entity_id']: entity_id,
+                    'entity_id': entity_id,
                     'spotify_playlist': pl_id,
-                    cats[current_host]['entity_name']: entity_name
+                    'entity_name': entity_name
                 }
             )
         else:
