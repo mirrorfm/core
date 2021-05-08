@@ -292,7 +292,7 @@ func (c *Client) getDiscogsLabel(labelId string) (la DiscogsLabel, err error) {
 func (c *Client) getEventsFromType(count int, entity string, ch chan []Event, wg *sync.WaitGroup) error {
 	defer (*wg).Done()
 
-	oneDayAgo := time.Now().Local().Add(-time.Hour).Unix()
+	oneDayAgo := time.Now().Local().Add(-time.Hour * 24).Unix()
 
 	var ev []Event
 	queryInput := &dynamodb.QueryInput{

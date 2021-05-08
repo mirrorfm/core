@@ -25,10 +25,10 @@ type Client struct {
 }
 
 const (
-	youtubeChannelsLimit      = 500
-	youtubeChannelsGenreLimit = 4
-	homeChannelsLimit         = 6
-	homeChannelsGenreLimit    = 20
+	entityLimit            = 500
+	genreLimit             = 4
+	homeChannelsLimit      = 6
+	homeChannelsGenreLimit = 20
 )
 
 var ginLambda *ginadapter.GinLambda
@@ -79,7 +79,7 @@ func init() {
 		handleAPIError(c, err)
 		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
 		handleAPIError(c, err)
-		channels, err := client.getYoutubeChannels("c.id", "ASC", youtubeChannelsLimit, youtubeChannelsGenreLimit)
+		channels, err := client.getYoutubeChannels("c.id", "ASC", entityLimit, genreLimit)
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{
@@ -104,7 +104,7 @@ func init() {
 		handleAPIError(c, err)
 		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
 		handleAPIError(c, err)
-		labels, err := client.getDiscogsLabels("l.id", "ASC", youtubeChannelsLimit, youtubeChannelsGenreLimit)
+		labels, err := client.getDiscogsLabels("l.id", "ASC", entityLimit, genreLimit)
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{
