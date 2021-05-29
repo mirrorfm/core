@@ -487,19 +487,19 @@ def save_cursors(just_processed_tracks, to_spotify_last_successful_entity):
 def get_next_tracks(entity_id):
     tracks_table = cats[current_host]['tracks_table']
     cursor = get_cursor(cats[current_host]['cursor_start_track_key'])
-
     host_entity_id = cats[current_host]['host_entity_id']
     host_entity_id_type = cats[current_host]['host_entity_id_type']
 
     if host_entity_id_type == int:
-        condition_expression = Key(host_entity_id).eq(int(entity_id))
-    else:
-        condition_expression = Key(host_entity_id).eq(entity_id)
+        entity_id = int(entity_id)
 
-    if 'Item' in cursor:
+    condition_expression = Key(host_entity_id).eq(entity_id)
+
+    if 'Item' in cursor and entity_id == cursor['Item']['value'][host_entity_id]:
         print(
             "Starting from track",
             cursor['Item']['value'][cats[current_host]['track_composite']])
+
         return tracks_table.query(
             Limit=BATCH_GET_SIZE,
             FilterExpression="attribute_not_exists(spotify_found_time)",
@@ -628,14 +628,6 @@ def handle(event, c):
 
         if total_added > 0:
             playlist_genres = count_frequency(new_track_genres)
-            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
-                           [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
-            for genre in playlist_genres:
-                cursor.execute(
-                    'INSERT INTO ' + cats[current_host]['genres_table'] + ' (' + cats[current_host]['host_entity_id'] + ', genre_name, count, last_updated) VALUES ("%s", %s, 1, NOW()) ON DUPLICATE KEY UPDATE count = count + 1, last_updated=NOW()',
-                    [entity_aid, genre])
-
-            conn.commit()
             events_table.put_item(
                 Item={
                     'host': current_host,
@@ -647,10 +639,17 @@ def handle(event, c):
                     'entity_name': entity_name
                 }
             )
+            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers=%s, last_search_time=now(), found_tracks=%s, last_found_time=now() WHERE spotify_playlist=%s AND num=%s',
+                           [pl["followers"]["total"], pl["tracks"]["total"], pl_id, num])
+            for genre in playlist_genres:
+                cursor.execute(
+                    'INSERT INTO ' + cats[current_host]['genres_table'] + ' (' + cats[current_host]['host_entity_id'] + ', genre_name, count, last_updated) VALUES ("%s", %s, 1, NOW()) ON DUPLICATE KEY UPDATE count = count + 1, last_updated=NOW()',
+                    [entity_aid, genre])
         else:
-            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers="%s", last_search_time=now() WHERE spotify_playlist="%s" AND num="%s"',
+            cursor.execute('UPDATE ' + cats[current_host]['playlist_table'] + ' SET count_followers=%s, last_search_time=now() WHERE spotify_playlist=%s AND num=%s',
                            [pl["followers"]["total"], pl_id, num])
-            conn.commit()
+
+        conn.commit()
 
 
 if __name__ == "__main__":
