@@ -48,7 +48,7 @@ type DiscogsLabel struct {
 type Event struct {
 	Host            string `json:"host"`
 	Timestamp       string `json:"timestamp"`
-	Added           string `json:"added"`
+	Added           int    `json:"added"`
 	SpotifyPlaylist string `json:"spotify_playlist" dynamodbav:"spotify_playlist"`
 	EntityID        string `json:"entity_id" dynamodbav:"entity_id"`
 	EntityName      string `json:"entity_name" dynamodbav:"entity_name"`
@@ -357,7 +357,7 @@ func (c *Client) getEvents(count int) (events []Event, err error) {
 
 	// Mix both YT and DG events
 	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp < events[j].Timestamp
+		return events[i].Timestamp > events[j].Timestamp
 	})
 
 	return events, nil
