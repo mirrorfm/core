@@ -49,10 +49,24 @@ func Handler() error {
 		os.Exit(1)
 	}
 
-	playlistsByFollowers, err := app.GetPlaylistsSortedByTotalFollowers(1000)
+	playlistsByFollowers, err := app.GetPlaylistsSortedByTotalFollowers(100)
+	if err != nil {
+		os.Exit(1)
+	}
+	playlistsByAddedDatetime, err := app.GetPlaylistsSortedByAddedDatetime(100)
+	if err != nil {
+		os.Exit(1)
+	}
+
+	var playlists []string
+	for i := 0; i < len(playlistsByAddedDatetime); i++ {
+		playlists = append(playlists, playlistsByFollowers[i])
+		playlists = append(playlists, playlistsByAddedDatetime[i])
+	}
+
 	rootList := api.RootListResponse{}
 
-	for expectedPosition, playlist := range playlistsByFollowers {
+	for expectedPosition, playlist := range playlists {
 		if rootList.Revision == "" {
 			// request RootList on first run and after every successful change
 			res, status, err := api.GetRootList(token.AccessToken, userId)
@@ -101,6 +115,31 @@ func GenerateSortOperations(contentItems []api.ContentsItem, playlistId string, 
 	}
 
 	return nil
+}
+
+func (client *App) GetPlaylistsSortedByAddedDatetime(limit int) ([]string, error) {
+	var playlists []string
+	db, err := client.SQLDriver.Query(fmt.Sprintf(`
+		SELECT yt_playlists.spotify_playlist as spotify_playlist
+		FROM
+		  yt_playlists
+		  JOIN yt_channels on yt_playlists.channel_id = yt_channels.channel_id
+		ORDER BY yt_channels.added_datetime DESC
+		LIMIT ?
+	`), limit)
+	if err != nil {
+		fmt.Println(err.Error())
+		return playlists, err
+	}
+	var playlistId string
+	for db.Next() {
+		err = db.Scan(&playlistId)
+		if err != nil {
+			return playlists, err
+		}
+		playlists = append(playlists, playlistId)
+	}
+	return playlists, nil
 }
 
 func (client *App) GetPlaylistsSortedByTotalFollowers(limit int) ([]string, error) {
