@@ -49,24 +49,20 @@ func Handler() error {
 		os.Exit(1)
 	}
 
-	playlistsByFollowers, err := app.GetPlaylistsSortedByTotalFollowers(100)
+	limit := 150
+	playlistsByFollowers, err := app.GetPlaylistsSortedByTotalFollowers(limit)
 	if err != nil {
 		os.Exit(1)
 	}
-	playlistsByAddedDatetime, err := app.GetPlaylistsSortedByAddedDatetime(100)
+	playlistsByAddedDatetime, err := app.GetPlaylistsSortedByAddedDatetime(limit)
 	if err != nil {
 		os.Exit(1)
 	}
-
-	var playlists []string
-	for i := 0; i < len(playlistsByAddedDatetime); i++ {
-		playlists = append(playlists, playlistsByFollowers[i])
-		playlists = append(playlists, playlistsByAddedDatetime[i])
-	}
+	mixedOrderPlaylist := mergeUnique(playlistsByFollowers, playlistsByAddedDatetime)
 
 	rootList := api.RootListResponse{}
 
-	for expectedPosition, playlist := range playlists {
+	for expectedPosition, playlist := range mixedOrderPlaylist {
 		if rootList.Revision == "" {
 			// request RootList on first run and after every successful change
 			res, status, err := api.GetRootList(token.AccessToken, userId)
@@ -92,12 +88,41 @@ func Handler() error {
 	return nil
 }
 
+func mergeUnique(pl1, pl2 []string) []string {
+	check := make(map[string]bool)
+	var playlists []string
+
+	l := min(len(pl1), len(pl2))
+
+	for i := 0; i < l; i++ {
+		appendUnique(pl1[i], check, &playlists)
+		appendUnique(pl2[i], check, &playlists)
+	}
+
+	return playlists
+}
+
+func appendUnique(pl string, check map[string]bool, mixedPl *[]string) {
+	if _, ok := check[pl]; !ok {
+		check[pl] = true
+		*mixedPl = append(*mixedPl, pl)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func findPlaylistCurrentPosition(playlistId string, contentItems []api.ContentsItem) (int, bool) {
 	for idx, contentItem := range contentItems {
 		if strings.Contains(contentItem.Uri, playlistId) {
 			return idx, true
 		}
 	}
+
 	return 0, false
 }
 
