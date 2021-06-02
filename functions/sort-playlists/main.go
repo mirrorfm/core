@@ -122,7 +122,6 @@ func findPlaylistCurrentPosition(playlistId string, contentItems []api.ContentsI
 			return idx, true
 		}
 	}
-
 	return 0, false
 }
 
@@ -145,11 +144,19 @@ func GenerateSortOperations(contentItems []api.ContentsItem, playlistId string, 
 func (client *App) GetPlaylistsSortedByAddedDatetime(limit int) ([]string, error) {
 	var playlists []string
 	db, err := client.SQLDriver.Query(fmt.Sprintf(`
-		SELECT yt_playlists.spotify_playlist as spotify_playlist
-		FROM
-		  yt_playlists
-		  JOIN yt_channels on yt_playlists.channel_id = yt_channels.channel_id
-		ORDER BY yt_channels.added_datetime DESC
+		SELECT spotify_playlist FROM
+		(
+				SELECT
+					   yt_playlists.spotify_playlist as spotify_playlist,
+					   yt_channels.added_datetime as added_datetime
+				FROM yt_playlists JOIN yt_channels on yt_playlists.channel_id = yt_channels.channel_id
+				UNION ALL
+				SELECT
+					   dg_playlists.spotify_playlist as spotify_playlist,
+					   dg_labels.added_datetime as added_datetime
+				FROM dg_playlists JOIN dg_labels on dg_playlists.label_id = dg_labels.label_id
+		) T1
+		ORDER BY added_datetime DESC
 		LIMIT ?
 	`), limit)
 	if err != nil {
@@ -170,8 +177,12 @@ func (client *App) GetPlaylistsSortedByAddedDatetime(limit int) ([]string, error
 func (client *App) GetPlaylistsSortedByTotalFollowers(limit int) ([]string, error) {
 	var playlists []string
 	db, err := client.SQLDriver.Query(fmt.Sprintf(`
-		SELECT spotify_playlist
-		FROM yt_playlists
+		SELECT spotify_playlist FROM
+		(
+			SELECT spotify_playlist, count_followers FROM yt_playlists
+			UNION ALL
+			SELECT spotify_playlist, count_followers FROM dg_playlists
+		) T1
 		ORDER BY count_followers DESC
 		LIMIT ?
 	`), limit)
