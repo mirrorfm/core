@@ -31,9 +31,12 @@ const (
 	homeChannelsGenreLimit = 20
 )
 
+var isLocal bool
 var ginLambda *ginadapter.GinLambda
 
 func init() {
+	isLocal = os.Getenv("AWS_EXECUTION_ENV") == ""
+
 	// stdout and stderr are sent to AWS CloudWatch Logs
 	log.Printf("Gin cold start")
 	r := gin.Default()
@@ -148,7 +151,7 @@ func init() {
 		})
 	})
 
-	if os.Getenv("AWS_EXECUTION_ENV") == "" {
+	if isLocal {
 		fmt.Println("Running in development mode")
 		_ = r.Run()
 	} else {
@@ -168,10 +171,15 @@ func main() {
 
 func cors(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
-	c.Header("Access-Control-Allow-Origin", "https://mirror.fm")
 	c.Header("Access-Control-Allow-Credentials", "true")
 	c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 	c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+
+	if isLocal {
+		c.Header("Access-Control-Allow-Origin", "*")
+	} else {
+		c.Header("Access-Control-Allow-Origin", "https://mirror.fm")
+	}
 }
 
 func handleAPIError(c *gin.Context, err error) {
