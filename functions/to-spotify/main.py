@@ -179,6 +179,7 @@ def restore_spotify_token():
         return 0
 
     token = res['Item']['value']
+    print(token)
     with open("/tmp/.cache", "w+") as f:
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
@@ -222,6 +223,9 @@ def find_on_spotify_by_artist_track(sp, track_name):
     else:
         print("[?]", track_name)
         query = track_name
+    if len(query) > 100:
+        print("Length was > 100", len(query), query)
+        return None
     try:
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
@@ -240,6 +244,9 @@ def cleanse_artist(artist):
 def find_on_spotify_by_track_and_artist(sp, track_name, artist):
     artist = cleanse_artist(artist)
     query = 'track:"{0}"+artist:"{1}"'.format(track_name, artist)
+    if len(query) > 100:
+        print("Length was > 100", len(query), query)
+        return None
     try:
         results = sp.search(query, limit=1, type='track')
         for _, spotify_track in enumerate(results['tracks']['items']):
