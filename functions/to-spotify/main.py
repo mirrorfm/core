@@ -164,6 +164,7 @@ def restore_spotify_token():
         return 0
 
     token = res['Item']['value']
+    print(token)
     with open("/tmp/.cache", "w+") as f:
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
