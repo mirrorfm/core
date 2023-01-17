@@ -52,3 +52,4 @@ deploy-to-spotify:
 	docker build -t to-spotify functions/to-spotify
 	docker tag to-spotify:latest ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/to-spotify:latest
 	docker push ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/to-spotify:latest
+	sh ./utils/set-ecr.sh to-spotify ${AWS_ACCOUNT_ID}

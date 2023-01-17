@@ -26,6 +26,7 @@ import boto3
 import pymysql
 import random
 import re
+from pprint import pprint
 
 db_username = os.getenv('DB_USERNAME')
 db_password = os.getenv('DB_PASSWORD')
@@ -164,7 +165,6 @@ def restore_spotify_token():
         return 0
 
     token = res['Item']['value']
-    print(token)
     with open("/tmp/.cache", "w+") as f:
         f.write("%s" % json.dumps(token,
                                   ensure_ascii=False,
@@ -227,7 +227,14 @@ def find_track_on_spotify(handler, query):
     if len(query) > 100:
         print("Length was > 100", len(query), query)
         return
-    results = handler.sp.search(query, limit=1, type='track')
+    try:
+        results = handler.sp.search(query, limit=1, type='track')
+    except Exception as e:
+        print(e)
+        if e.args[0] == 404:
+            # TODO sometimes length > 100 with special characters
+            return
+        raise e
     for _, spotify_track in enumerate(results['tracks']['items']):
         return spotify_track
     # print("[x]", artist, "-", track_name)
@@ -328,7 +335,7 @@ def add_track_to_duplicate_index(handler, entity_id, track_spotify_uri, spotify_
 
 
 def playlist_seems_full(e, handler, spotify_playlist):
-    if not (hasattr(e, 'http_status') and e.http_status in [403, 500]):
+    if hasattr(e, 'http_status') and e.http_status in [403, 500]:
         return False
     # only query Spotify total as a last resort
     # https://github.com/spotify/web-api/issues/1179
