@@ -14,7 +14,6 @@ from trackfilter.cli import split_artist_track
 import spotipy.oauth2 as oauth2
 import spotipy
 from datetime import datetime, timezone
-from pprint import pprint
 import requests
 import base64
 import time
@@ -26,7 +25,6 @@ import boto3
 import pymysql
 import random
 import re
-from pprint import pprint
 
 db_username = os.getenv('DB_USERNAME')
 db_password = os.getenv('DB_PASSWORD')
@@ -257,8 +255,9 @@ def get_as_base64(url):
 def resize_as_base64(url):
     from PIL import Image
     from io import BytesIO
+    from urllib.request import urlopen
 
-    im = Image.open(requests.get(url, stream=True).raw)
+    im = Image.open(urlopen(url))
     new_image = im.resize((300, 300))
     buffered = BytesIO()
     new_image.save(buffered, format="JPEG")
@@ -272,9 +271,9 @@ def add_channel_cover_to_playlist(handler, entity_id, playlist_id):
     row = cursor.fetchone()
     if row:
         thumbnail = row['thumbnail_medium']
-        b64 = get_as_base64(thumbnail) if cats[handler.current_host]['thumbnail_needs_resize'] else resize_as_base64(
-            thumbnail)
-        handler.sp.playlist_upload_cover_image(playlist_id, b64)
+        b64 = (resize_as_base64(thumbnail) if cats[handler.current_host]['thumbnail_needs_resize']
+               else get_as_base64(thumbnail))
+        return handler.sp.playlist_upload_cover_image(playlist_id, b64)
 
 
 def create_playlist(handler, entity_id, num=1):

@@ -2,3 +2,4 @@ git+https://github.com/mirrorfm/trackfilter
 spotipy==2.22.0
 pymysql==0.9.3
 Pillow==9.3.0
+urllib3==1.26.12
