@@ -26,12 +26,12 @@ type Entity struct {
 	CountFollowers  int            `json:"count_followers"`
 	Genres          []Genre        `json:"genres"`
 	LastFoundTime   time.Time      `json:"last_found_time"`
+	CountTracks     int            `json:"count_tracks"`
 }
 
 type YoutubeChannel struct {
 	ChannelId          string       `json:"channel_id"`
 	ChannelName        string       `json:"channel_name"`
-	CountTracks        int          `json:"count_tracks"`
 	TerminatedDatetime sql.NullTime `json:"terminated_datetime"`
 	LastUploadDatetime time.Time    `json:"last_upload_datetime"`
 	UploadPlaylistId   string       `json:"upload_playlist_id"`
@@ -39,9 +39,8 @@ type YoutubeChannel struct {
 }
 
 type DiscogsLabel struct {
-	LabelId     string `json:"label_id"`
-	LabelName   string `json:"label_name"`
-	FoundTracks int    `json:"found_tracks"`
+	LabelId   string `json:"label_id"`
+	LabelName string `json:"label_name"`
 	Entity
 }
 
@@ -223,7 +222,7 @@ func (c *Client) getYoutubeChannel(channelId string) (ch YoutubeChannel, err err
 func (c *Client) getDiscogsLabels(orderBy, order string, limit, limitGenres int) (res []DiscogsLabel, err error) {
 	query := fmt.Sprintf(`
 		SELECT
-			l.id, l.label_id, l.label_name, l.found_tracks as count_tracks,
+			l.id, l.label_id, l.label_name, l.count_tracks as count_tracks,
 			l.thumbnail_medium, l.added_datetime,
 			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
 			p.last_found_time as last_found_time
@@ -249,7 +248,7 @@ func (c *Client) getDiscogsLabels(orderBy, order string, limit, limitGenres int)
 			&la.ThumbnailMedium,
 			&la.AddedDatetime,
 			&la.PlaylistId,
-			&la.FoundTracks,
+			&la.CountTracks,
 			&la.CountFollowers,
 			&la.LastFoundTime)
 		if err != nil {
@@ -270,10 +269,10 @@ func (c *Client) getDiscogsLabels(orderBy, order string, limit, limitGenres int)
 func (c *Client) getDiscogsLabel(labelId string) (la DiscogsLabel, err error) {
 	selDB := c.SQLDriver.QueryRow(fmt.Sprintf(`
 		SELECT
-		    l.id, l.label_id, l.label_name, l.found_tracks, l.thumbnail_medium, l.added_datetime,
+		    l.id, l.label_id, l.label_name, l.count_tracks, l.thumbnail_medium, l.added_datetime,
 		    p.spotify_playlist, p.found_tracks
-		FROM yt_labels as l
-		INNER JOIN yt_playlists p on l.label_id = p.label_id
+		FROM dg_labels as l
+		INNER JOIN dg_playlists p on l.label_id = p.label_id
 		WHERE l.label_id = ?`), labelId)
 
 	err = selDB.Scan(
@@ -284,7 +283,7 @@ func (c *Client) getDiscogsLabel(labelId string) (la DiscogsLabel, err error) {
 		&la.ThumbnailMedium,
 		&la.AddedDatetime,
 		&la.PlaylistId,
-		&la.FoundTracks)
+		&la.CountTracks)
 
 	return la, err
 }

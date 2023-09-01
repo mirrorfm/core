@@ -1,5 +1,0 @@
-{
-  "description": "API",
-  "runtime": "golang",
-  "timeout": 60
-}

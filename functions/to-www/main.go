@@ -12,6 +12,7 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/gin"
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/pkg/errors"
 	"log"
 	"os"
 )
@@ -104,11 +105,20 @@ func init() {
 
 	r.GET("/labels", func(c *gin.Context) {
 		totalTracks, err := client.getTableCount(client.DynamoDBTracksTable)
-		handleAPIError(c, err)
+		if err != nil {
+			handleAPIError(c, errors.Wrap(err, "couldn't get table count"))
+			return
+		}
 		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
-		handleAPIError(c, err)
+		if err != nil {
+			handleAPIError(c, errors.Wrap(err, "couldn't get found tracks"))
+			return
+		}
 		labels, err := client.getDiscogsLabels("l.id", "ASC", entityLimit, genreLimit)
-		handleAPIError(c, err)
+		if err != nil {
+			handleAPIError(c, errors.Wrap(err, "couldn't get discogs labels"))
+			return
+		}
 
 		c.JSON(200, gin.H{
 			"discogs":      labels,
@@ -120,7 +130,10 @@ func init() {
 
 	r.GET("/labels/:id", func(c *gin.Context) {
 		label, err := client.getDiscogsLabel(c.Param("id"))
-		handleAPIError(c, err)
+		if err != nil {
+			handleAPIError(c, errors.Wrap(err, "couldn't get discogs label"))
+			return
+		}
 
 		c.JSON(200, gin.H{
 			"label": label,

@@ -22,7 +22,7 @@ create table dg_labels
     added_datetime        datetime             null,
     updated_datetime      datetime             null,
     highest_dg_release    int        default 0 null,
-    found_tracks          int        default 0 null,
+    count_tracks          int        default 0 null,
     label_releases        int        default 0 null,
     last_page             int        default 0 null,
     did_init              tinyint(1) default 0 null,
@@ -47,7 +47,8 @@ create index dg_playlists_label_id_num_index
 
 create table yt_channels
 (
-    id                   int auto_increment,
+    id                   int auto_increment
+        primary key,
     channel_id           varchar(256) not null,
     channel_name         varchar(256) not null,
     count_tracks         int          not null,
@@ -64,9 +65,6 @@ create table yt_channels
     constraint yt_channels_id_uindex
         unique (id)
 );
-
-alter table yt_channels
-    add primary key (id);
 
 create table yt_genres
 (
