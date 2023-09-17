@@ -107,24 +107,33 @@ func getApp(ctx context.Context) (App, error) {
 }
 
 func Handler(ctx context.Context, evt github.PushEvent) error {
-	app, err := getApp(ctx)
-	if err != nil {
-		return err
+	fmt.Printf("%+v\n", evt)
+	if evt.Repo == nil || evt.Repo.FullName == nil || evt.HeadCommit == nil || evt.HeadCommit.Modified == nil {
+		// Github webhook sends multiple events for a single push
+		fmt.Println("ignored incorrect event: some fields missing")
+		return nil
 	}
 
-	repo := *evt.Repo.FullName
+	app, err := getApp(ctx)
+	if err != nil {
+		return errors.Wrap(err, "could not set up app")
+	}
 
 	for _, file := range evt.HeadCommit.Modified {
-		err := app.ProcessFile(repo, file)
+		current, err := app.ProcessFile(*evt.Repo.FullName, file)
 		if err != nil {
-			return err
+			return errors.Wrap(err, fmt.Sprintf("could not process file %s", file))
+		}
+		err = app.SaveCursor(categories[file].DynamoCursor, current)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("could not save cursor %d for file %s", current, categories[file].DynamoCursor))
 		}
 	}
 
 	return nil
 }
 
-func (client *App) ProcessFile(repo, file string) error {
+func (client *App) ProcessFile(repo, file string) (int, error) {
 	s := []string{
 		"https://raw.githubusercontent.com",
 		repo,
@@ -135,12 +144,12 @@ func (client *App) ProcessFile(repo, file string) error {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("failed to get %s", url))
+		return 0, errors.Wrap(err, fmt.Sprintf("failed to get %s", url))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New(fmt.Sprintf("status %d for %s", resp.StatusCode, url))
+		return 0, errors.New(fmt.Sprintf("status %d for %s", resp.StatusCode, url))
 	}
 
 	var lines []string
@@ -149,7 +158,7 @@ func (client *App) ProcessFile(repo, file string) error {
 		lines = append(lines, scanner.Text())
 	}
 	if len(lines) == 0 {
-		return errors.New("nothing in file")
+		return 0, errors.New("nothing in file")
 	}
 
 	cat := categories[file]
@@ -157,15 +166,15 @@ func (client *App) ProcessFile(repo, file string) error {
 
 	current, err := client.GetCursor(cat.DynamoCursor)
 	if err != nil {
-		return err
+		return 0, errors.Wrap(err, "could not get cursor")
 	}
 
 	current, err = client.processLines(lines, current, cat)
 	if err != nil {
-		return errors.Wrap(err, "failed to process lines")
+		return 0, errors.Wrap(err, "failed to process lines")
 	}
 
-	return client.SaveCursor(cat.DynamoCursor, current)
+	return current, nil
 }
 
 func (client *App) processLines(lines []string, current int, cat Category) (int, error) {

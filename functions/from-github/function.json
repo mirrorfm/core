@@ -1,5 +1,0 @@
-{
-    "description": "From Github to DynamoDB",
-    "runtime": "golang",
-    "timeout": 30
-  }
