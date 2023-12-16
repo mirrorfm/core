@@ -25,6 +25,7 @@ import boto3
 import pymysql
 import random
 import re
+from difflib import SequenceMatcher
 
 db_username = os.getenv('DB_USERNAME')
 db_password = os.getenv('DB_PASSWORD')
@@ -32,6 +33,17 @@ db_name = os.getenv('DB_NAME')
 db_host = os.getenv('DB_HOST')
 
 deser = TypeDeserializer()
+
+
+TRACK_SIMILARITY_THRESHOLD = 0.8
+TRACK_SIMILARITY_EXCLUDES = [
+    "radio version",
+    "original mix",
+    "original version",
+    "club mix",
+    "instrumental",
+    "remix"
+]
 
 
 # custom exceptions
@@ -202,7 +214,9 @@ def get_spotify():
 def find_youtube_track_on_spotify(handler, track_name):
     artist_and_track = split_artist_track(track_name)
     if artist_and_track is not None and len(artist_and_track) > 1:
-        query = 'track:{0[1]} artist:{0[0][0]}'.format(artist_and_track)
+        track = '{0[1]}'.format(artist_and_track).strip()
+        artist = '{0[0][0]}'.format(artist_and_track).strip()
+        query = 'track:{0} artist:{1}'.format(artist, track)
     else:
         print("[?]", track_name)
         query = track_name
@@ -211,7 +225,7 @@ def find_youtube_track_on_spotify(handler, track_name):
 
 def find_discogs_track_on_spotify(handler, track_name, artist):
     artist = cleanse_artist(artist)
-    query = 'track:{0} artist:{1}'.format(track_name, artist)
+    query = 'track:{0} artist:{1}'.format(track_name.strip(), artist.strip())
     return find_track_on_spotify(handler, query)
 
 
@@ -400,6 +414,10 @@ def get_first_artist(record):
     return record["release_artistssort"]
 
 
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
+
 def spotify_lookup(handler, record, new_track_genres):
     if cats[handler.current_host]['track_parsing_needed']:
         track_name = record[cats[handler.current_host]['track_name']]
@@ -418,15 +436,31 @@ def spotify_lookup(handler, record, new_track_genres):
     if spotify_track_info and not is_track_duplicate(handler,
                                                      record[cats[handler.current_host]['host_entity_id']],
                                                      spotify_track_info['uri']):
+        found_track = " - ".join([spotify_track_info['artists'][0]['name'], spotify_track_info['name']])
+
+        def sanitize(track):
+            # make track alphanumeric and lowercase
+            # also removes frequent track suffixes such as `Original Mix`
+            track = ''.join(ch for ch in track if ch.isalnum()).lower()
+            for sub in TRACK_SIMILARITY_EXCLUDES:
+                track = track.replace(sub, '')
+            return track
+
+        similarity = similar(sanitize(track_name), sanitize(found_track))
+
+        if similarity < TRACK_SIMILARITY_THRESHOLD:
+            return
+
         print(
             "[√]",
             spotify_track_info['uri'],
             spotify_track_info['artists'][0]['name'],
             "-",
             spotify_track_info['name'],
-            "\n",
-            "\t\t\t\t\t",
-            track_name)
+            "\n\t\t\t\t\t",
+            track_name,
+            "\n\t\t\t\t\t",
+            similarity)
         genres = find_genres(handler, spotify_track_info, new_track_genres)
         spotify_playlist = add_track_to_spotify_playlist(
             handler, spotify_track_info['uri'], record[cats[handler.current_host]['host_entity_id']])
