@@ -202,7 +202,7 @@ def get_spotify():
 def find_youtube_track_on_spotify(handler, track_name):
     artist_and_track = split_artist_track(track_name)
     if artist_and_track is not None and len(artist_and_track) > 1:
-        query = 'track:"{0[1]}"+artist:"{0[0][0]}"'.format(artist_and_track)
+        query = 'track:{0[1]} artist:{0[0][0]}'.format(artist_and_track)
     else:
         print("[?]", track_name)
         query = track_name
@@ -211,7 +211,7 @@ def find_youtube_track_on_spotify(handler, track_name):
 
 def find_discogs_track_on_spotify(handler, track_name, artist):
     artist = cleanse_artist(artist)
-    query = 'track:"{0}"+artist:"{1}"'.format(track_name, artist)
+    query = 'track:{0} artist:{1}'.format(track_name, artist)
     return find_track_on_spotify(handler, query)
 
 
