@@ -1,25 +1,9 @@
 setup:
 	npm install json-to-env -g
 
-from-discogs:
-	cd functions/from-discogs && json-to-env ./env.json ./env.sh
-	cd functions/from-discogs && source ./env.sh && rm ./env.sh && go run *.go
-
-from-youtube:
-	cd functions/from-youtube && json-to-env ./env.json ./env.sh
-	cd functions/from-youtube && source ./env.sh && rm ./env.sh && python3 main.py
-
 sort-playlists:
 	cd functions/sort-playlists && json-to-env ./env.json ./env.sh
 	cd functions/sort-playlists && source ./env.sh && rm ./env.sh && go run *.go
-
-deploy-from-discogs:
-	apex build from-discogs >/dev/null
-	apex deploy from-discogs --region eu-west-1 -ldebug --env-file ./functions/from-discogs/env.json
-
-deploy-from-youtube:
-	apex build from-youtube >/dev/null
-	apex deploy from-youtube --region eu-west-1 -ldebug --env-file ./functions/from-youtube/env.json
 
 deploy-sort-playlists:
 	apex build sort-playlists >/dev/null
@@ -57,3 +41,25 @@ deploy-from-github:
 	docker tag from-github:latest ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-github:latest
 	docker push ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-github:latest
 	sh ./utils/set-ecr.sh from-github ${AWS_ACCOUNT_ID}
+
+from-discogs:
+	cd functions/from-discogs && source ./env.sh && go run *.go
+setup-from-discogs:
+	aws ecr create-repository --repository-name from-discogs --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region eu-west-1
+deploy-from-discogs:
+	aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com
+	docker build -t from-discogs functions/from-discogs
+	docker tag from-discogs:latest ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-discogs:latest
+	docker push ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-discogs:latest
+	sh ./utils/set-ecr.sh from-discogs ${AWS_ACCOUNT_ID}
+
+from-youtube:
+	cd functions/from-youtube && source ./env.sh && go run *.go
+setup-from-youtube:
+	aws ecr create-repository --repository-name from-youtube --image-scanning-configuration scanOnPush=true --image-tag-mutability MUTABLE --region eu-west-1
+deploy-from-youtube:
+	aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com
+	docker build -t from-youtube functions/from-youtube
+	docker tag from-youtube:latest ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-youtube:latest
+	docker push ${AWS_ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/from-youtube:latest
+	sh ./utils/set-ecr.sh from-youtube ${AWS_ACCOUNT_ID}

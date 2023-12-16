@@ -121,7 +121,7 @@ def get_next_channel():
         last_channel_id = 1
 
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1 limit 1" % str(last_channel_id))
+    cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1, id limit 1" % str(last_channel_id))
     return cursor.fetchone()
 
 

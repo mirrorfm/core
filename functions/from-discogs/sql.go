@@ -85,7 +85,7 @@ func (client *App) GetNextLabel(lastSuccessChannel int) (LocalLabel, error) {
 			label_id
 		FROM dg_labels
 		WHERE (id > ? or id = 1)
-		ORDER BY id = 1
+		ORDER BY id = 1, id
 		LIMIT 1
 	`), lastSuccessChannel)
 	err := selDB.Scan(
