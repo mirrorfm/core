@@ -427,6 +427,7 @@ def spotify_lookup(handler, record, new_track_genres):
             # Discogs can have None title
             return False
         artist = get_first_artist(record)
+        # TODO remove number in `Artist (number)`
         spotify_track_info = find_discogs_track_on_spotify(handler, record['title'], artist)
         track_name = artist + " - " + record['title']
     tracks_table = cats[handler.current_host]['tracks_table']

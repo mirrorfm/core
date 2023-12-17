@@ -10,15 +10,14 @@ sys.path.append(module_path)
 
 from pprint import pprint
 from googleapiclient import discovery
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import types
 
 import dateutil.parser
+from zoneinfo import ZoneInfo
+
 import boto3
 import pymysql
-
-import pytz
-utc=pytz.UTC
 
 # Hide warnings https://github.com/googleapis/google-api-python-client/issues/299
 import logging
@@ -79,12 +78,12 @@ def get_video_id(playlist_item, item_content):
 
 
 def add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list):
-    next_last_upload_datetime = next_last_upload_datetime.replace(tzinfo=utc)
-    item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt']).replace(tzinfo=utc)
-    if item_datetime > last_upload_datetime.replace(tzinfo=utc):
+    next_last_upload_datetime = next_last_upload_datetime.replace(tzinfo=ZoneInfo("UTC"))
+    item_datetime = get_datetime_from_iso8601_string(item['snippet']['publishedAt']).replace(tzinfo=ZoneInfo("UTC"))
+    if item_datetime > last_upload_datetime.replace(tzinfo=ZoneInfo("UTC")):
         # print(get_video_id(process_full_list, item['contentDetails']) + " " + item['snippet']['publishedAt'] + " - " + str(item['snippet']['title']))
         new_items_desc.append(item)
-        if item_datetime > next_last_upload_datetime.replace(tzinfo=utc):
+        if item_datetime > next_last_upload_datetime.replace(tzinfo=ZoneInfo("UTC")):
             return item_datetime
     return next_last_upload_datetime
 
@@ -214,7 +213,7 @@ def handle(event, context):
     if not last_upload_datetime or type(last_upload_datetime) == str:
         process_full_list = True
         old_yt_count_tracks = 0
-        last_upload_datetime = datetime.min.replace(tzinfo=timezone.utc)
+        last_upload_datetime = datetime.min.replace(tzinfo=ZoneInfo("UTC"))
     else:
         process_full_list = False
 

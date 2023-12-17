@@ -116,7 +116,7 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 
 		localLabel.MaxPages = releases.Pagination.Pages
 
-		log.Printf("Page %d/%d\n", localLabel.LastPage+1, localLabel.MaxPages+1)
+		log.Printf("Page %d/%d\n", localLabel.LastPage, localLabel.MaxPages)
 
 		uniqueMasterReleases, skipped, err := app.populateUniqueMasterReleases(releases, localLabel)
 		if err != nil {
