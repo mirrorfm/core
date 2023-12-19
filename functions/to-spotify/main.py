@@ -216,7 +216,7 @@ def find_youtube_track_on_spotify(handler, track_name):
     if artist_and_track is not None and len(artist_and_track) > 1:
         track = '{0[1]}'.format(artist_and_track).strip()
         artist = '{0[0][0]}'.format(artist_and_track).strip()
-        query = 'track:{0} artist:{1}'.format(artist, track)
+        query = 'track:{0} artist:{1}'.format(track, artist)
     else:
         print("[?]", track_name)
         query = track_name
@@ -249,7 +249,6 @@ def find_track_on_spotify(handler, query):
         raise e
     for _, spotify_track in enumerate(results['tracks']['items']):
         return spotify_track
-    # print("[x]", artist, "-", track_name)
 
 
 def get_last_playlist(handler, entity_id):
