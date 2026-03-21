@@ -3,3 +3,4 @@ spotipy==2.22.1
 pymysql==0.9.3
 Pillow==9.3.0
 urllib3==1.26.18
+boto3

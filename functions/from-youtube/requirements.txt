@@ -2,3 +2,5 @@ google-api-python-client
 httplib2
 uritemplate
 pymysql==0.9.3
+python-dateutil
+boto3
