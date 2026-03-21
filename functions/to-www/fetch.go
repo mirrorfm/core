@@ -20,6 +20,7 @@ type PaginationParams struct {
 	Sort    string
 	Order   string
 	Search  string
+	Genres  []string
 }
 
 var channelSortColumns = map[string]string{
@@ -54,6 +55,7 @@ func parsePaginationParams(c *gin.Context) PaginationParams {
 		order = "DESC"
 	}
 	search := c.DefaultQuery("search", "")
+	genres := c.QueryArray("genres")
 
 	return PaginationParams{
 		Page:    page,
@@ -61,6 +63,7 @@ func parsePaginationParams(c *gin.Context) PaginationParams {
 		Sort:    sortParam,
 		Order:   order,
 		Search:  search,
+		Genres:  genres,
 	}
 }
 
@@ -318,30 +321,52 @@ func (c *Client) getDiscogsLabels(orderBy, order string, limit, limitGenres int)
 	return res, nil
 }
 
+func buildWhereClause(params PaginationParams, nameCol, genreIdCol, genreTable string) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+	escapedSearch := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(params.Search)
+
+	if escapedSearch != "" {
+		conditions = append(conditions, nameCol+" LIKE ?")
+		args = append(args, "%"+escapedSearch+"%")
+	}
+	if len(params.Genres) > 0 {
+		placeholders := make([]string, len(params.Genres))
+		for i, g := range params.Genres {
+			placeholders[i] = "?"
+			args = append(args, g)
+		}
+		conditions = append(conditions, fmt.Sprintf(
+			"%s IN (SELECT %s FROM %s WHERE genre_name IN (%s))",
+			genreIdCol, genreIdCol, genreTable, strings.Join(placeholders, ",")))
+	}
+
+	if len(conditions) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conditions, " AND "), args
+}
+
 func (c *Client) getYoutubeChannelsPaginated(params PaginationParams, limitGenres int) ([]YoutubeChannel, int, error) {
 	sortCol, ok := channelSortColumns[params.Sort]
 	if !ok {
 		sortCol = "count_followers"
 	}
 	offset := (params.Page - 1) * params.PerPage
-	escapedSearch := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(params.Search)
+
+	whereClause, whereArgs := buildWhereClause(params, "c.channel_name", "c.id", "yt_genres")
 
 	// Count query
 	countQuery := `SELECT COUNT(DISTINCT c.id) FROM yt_channels as c
-		INNER JOIN yt_playlists p on c.channel_id = p.channel_id`
-	var countArgs []interface{}
-	if escapedSearch != "" {
-		countQuery += ` WHERE c.channel_name LIKE ?`
-		countArgs = append(countArgs, "%"+escapedSearch+"%")
-	}
+		INNER JOIN yt_playlists p on c.channel_id = p.channel_id` + whereClause
 	var totalCount int
-	err := c.SQLDriver.QueryRow(countQuery, countArgs...).Scan(&totalCount)
+	err := c.SQLDriver.QueryRow(countQuery, whereArgs...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Data query
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
 			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
 			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
@@ -349,12 +374,9 @@ func (c *Client) getYoutubeChannelsPaginated(params PaginationParams, limitGenre
 			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
 			p.last_found_time as last_found_time
 		FROM yt_channels as c
-		INNER JOIN yt_playlists p on c.channel_id = p.channel_id`)
-	var args []interface{}
-	if escapedSearch != "" {
-		query += ` WHERE c.channel_name LIKE ?`
-		args = append(args, "%"+escapedSearch+"%")
-	}
+		INNER JOIN yt_playlists p on c.channel_id = p.channel_id` + whereClause
+	args := make([]interface{}, len(whereArgs))
+	copy(args, whereArgs)
 	query += fmt.Sprintf(` GROUP BY id ORDER BY %s %s LIMIT ? OFFSET ?`, sortCol, params.Order)
 	args = append(args, params.PerPage, offset)
 
@@ -402,36 +424,29 @@ func (c *Client) getDiscogsLabelsPaginated(params PaginationParams, limitGenres 
 		sortCol = "count_followers"
 	}
 	offset := (params.Page - 1) * params.PerPage
-	escapedSearch := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(params.Search)
+
+	whereClause, whereArgs := buildWhereClause(params, "l.label_name", "l.id", "yt_genres")
 
 	// Count query
 	countQuery := `SELECT COUNT(DISTINCT l.id) FROM dg_labels as l
-		INNER JOIN dg_playlists p on l.label_id = p.label_id`
-	var countArgs []interface{}
-	if escapedSearch != "" {
-		countQuery += ` WHERE l.label_name LIKE ?`
-		countArgs = append(countArgs, "%"+escapedSearch+"%")
-	}
+		INNER JOIN dg_playlists p on l.label_id = p.label_id` + whereClause
 	var totalCount int
-	err := c.SQLDriver.QueryRow(countQuery, countArgs...).Scan(&totalCount)
+	err := c.SQLDriver.QueryRow(countQuery, whereArgs...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Data query
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
 			l.id, l.label_id, l.label_name, l.count_tracks as count_tracks,
 			l.thumbnail_medium, l.added_datetime,
 			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
 			p.last_found_time as last_found_time
 		FROM dg_labels as l
-		INNER JOIN dg_playlists p on l.label_id = p.label_id`)
-	var args []interface{}
-	if escapedSearch != "" {
-		query += ` WHERE l.label_name LIKE ?`
-		args = append(args, "%"+escapedSearch+"%")
-	}
+		INNER JOIN dg_playlists p on l.label_id = p.label_id` + whereClause
+	args := make([]interface{}, len(whereArgs))
+	copy(args, whereArgs)
 	query += fmt.Sprintf(` GROUP BY id ORDER BY %s %s LIMIT ? OFFSET ?`, sortCol, params.Order)
 	args = append(args, params.PerPage, offset)
 
