@@ -1,8 +1,5 @@
-# Builds all mirror.fm worker functions into a single image,
-# imports it into k3s, and registers with ArgoCD.
-#
-# This is a multi-function variant of the homeplane deploy contract.
-# ArgoCD watches k8s/ for 3 Deployments + 1 CronJob.
+# Builds 4 separate Docker images for mirror.fm workers,
+# imports them into k3s, and syncs via ArgoCD.
 
 name: Deploy to k3s
 
@@ -17,11 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t mirrorfm-core:latest -f Dockerfile.k3s .
-
-      - name: Import into k3s
-        run: docker save mirrorfm-core:latest | sudo k3s ctr images import -
+      - name: Build and import images
+        run: |
+          for func in from-youtube from-discogs to-spotify sort-playlists; do
+            echo "=== Building mirrorfm-${func} ==="
+            docker build -t mirrorfm-${func}:latest -f Dockerfile.${func} .
+            docker save mirrorfm-${func}:latest | sudo k3s ctr images import -
+          done
 
       - name: Register with ArgoCD
         run: |

@@ -15,10 +15,8 @@ spec:
     spec:
       containers:
         - name: to-spotify
-          image: mirrorfm-core:latest
+          image: mirrorfm-to-spotify:latest
           imagePullPolicy: Never
-          command: ["/app/loop.sh"]
-          args: ["python", "/app/to-spotify/main.py"]
           env:
             - name: LOOP_INTERVAL
               value: "60"

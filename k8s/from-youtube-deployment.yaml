@@ -15,10 +15,8 @@ spec:
     spec:
       containers:
         - name: from-youtube
-          image: mirrorfm-core:latest
+          image: mirrorfm-from-youtube:latest
           imagePullPolicy: Never
-          command: ["/app/loop.sh"]
-          args: ["python", "/app/from-youtube/main.py"]
           env:
             - name: LOOP_INTERVAL
               value: "60"

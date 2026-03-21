@@ -17,7 +17,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: sort-playlists
-              image: mirrorfm-core:latest
+              image: mirrorfm-sort-playlists:latest
               imagePullPolicy: Never
               command: ["/app/sort-playlists/sort-playlists"]
               envFrom:

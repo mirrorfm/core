@@ -15,10 +15,8 @@ spec:
     spec:
       containers:
         - name: from-discogs
-          image: mirrorfm-core:latest
+          image: mirrorfm-from-discogs:latest
           imagePullPolicy: Never
-          command: ["/app/loop.sh"]
-          args: ["/app/from-discogs/from-discogs"]
           env:
             - name: LOOP_INTERVAL
               value: "60"

@@ -1,0 +1,12 @@
+FROM golang:1.21 AS build
+WORKDIR /build
+COPY functions/from-discogs/go.mod functions/from-discogs/go.sum ./
+RUN go mod download
+COPY functions/from-discogs/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /from-discogs
+
+FROM alpine:3.19
+COPY --from=build /from-discogs /app/from-discogs
+COPY scripts/loop.sh /app/loop.sh
+RUN chmod +x /app/loop.sh
+CMD ["/app/loop.sh", "/app/from-discogs"]
