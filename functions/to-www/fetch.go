@@ -337,8 +337,8 @@ func buildWhereClause(params PaginationParams, nameCol, genreIdCol, genreTable s
 			args = append(args, g)
 		}
 		conditions = append(conditions, fmt.Sprintf(
-			"%s IN (SELECT %s FROM %s WHERE genre_name IN (%s))",
-			genreIdCol, genreIdCol, genreTable, strings.Join(placeholders, ",")))
+			"%s IN (SELECT yt_channel_id FROM %s WHERE genre_name IN (%s))",
+			genreIdCol, genreTable, strings.Join(placeholders, ",")))
 	}
 
 	if len(conditions) == 0 {
