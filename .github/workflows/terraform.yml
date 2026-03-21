@@ -35,6 +35,7 @@ env:
   TF_VAR_secret_from_discogs: ${{ secrets.SECRET_FROM_DISCOGS }}
   TF_VAR_secret_to_spotify: ${{ secrets.SECRET_TO_SPOTIFY }}
   TF_VAR_secret_sort_playlists: ${{ secrets.SECRET_SORT_PLAYLISTS }}
+  TF_VAR_manage_secret_values: "true"
 
 jobs:
   plan:

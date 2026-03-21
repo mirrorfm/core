@@ -1,0 +1,70 @@
+# Builds and deploys cloud Lambda functions (to-www, from-github) to ECR.
+# Triggers on push to master when function code changes.
+#
+# Requires GitHub secrets:
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "functions/to-www/**"
+      - "functions/from-github/**"
+      - ".github/workflows/deploy-lambda.yml"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ACCOUNT_ID: "705440408593"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        function: [to-www, from-github]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if function changed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- functions/${{ matrix.function }}/ || echo "functions/${{ matrix.function }}/")
+            if [ -n "$CHANGED" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Configure AWS credentials
+        if: steps.check.outputs.changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        if: steps.check.outputs.changed == 'true'
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build, push, and deploy
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          IMAGE=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.function }}:latest
+          docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
+            -t ${{ matrix.function }} functions/${{ matrix.function }}
+          docker tag ${{ matrix.function }}:latest $IMAGE
+          docker push $IMAGE
+          aws lambda update-function-code \
+            --function-name mirror-fm_${{ matrix.function }} \
+            --image-uri $IMAGE \
+            --region ${{ env.AWS_REGION }}
+          echo "Deployed mirror-fm_${{ matrix.function }}"

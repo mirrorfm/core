@@ -8,27 +8,38 @@ variable "secret_from_youtube" {
   description = "JSON string of env vars for from-youtube"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "secret_from_discogs" {
   description = "JSON string of env vars for from-discogs"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "secret_to_spotify" {
   description = "JSON string of env vars for to-spotify"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "secret_sort_playlists" {
   description = "JSON string of env vars for sort-playlists"
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "manage_secret_values" {
+  description = "Whether to manage secret values (set to true in GHA, false for local plans)"
+  type        = bool
+  default     = false
 }
 
 locals {
+  secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "sort-playlists"])
   secrets = {
     from-youtube   = var.secret_from_youtube
     from-discogs   = var.secret_from_discogs
@@ -38,12 +49,12 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "function_secrets" {
-  for_each = local.secrets
+  for_each = local.secret_names
   name     = "homeplane/${each.key}"
 }
 
 resource "aws_secretsmanager_secret_version" "function_secrets" {
-  for_each      = local.secrets
+  for_each      = var.manage_secret_values ? local.secret_names : toset([])
   secret_id     = aws_secretsmanager_secret.function_secrets[each.key].id
-  secret_string = each.value
+  secret_string = local.secrets[each.key]
 }
