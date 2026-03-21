@@ -1,0 +1,9 @@
+name: mirrorfm-core
+type: deployment
+dockerfile: Dockerfile.k3s
+k8s_path: k8s
+resources:
+  cpu: 500m
+  memory: 512Mi
+  cpu_request: 100m
+  memory_request: 256Mi

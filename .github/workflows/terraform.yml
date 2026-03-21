@@ -1,0 +1,115 @@
+# Manages AWS infrastructure for k3s migration (secrets, EventBridge fallback rules).
+# - On PR: runs terraform plan and posts the diff as a comment.
+# - On push to main: runs terraform apply.
+#
+# Requires GitHub secrets:
+#   AWS_ACCESS_KEY_ID           — IAM user with permissions for Secrets Manager + EventBridge
+#   AWS_SECRET_ACCESS_KEY       — corresponding secret key
+#   SECRET_FROM_YOUTUBE         — JSON string of env vars for from-youtube
+#   SECRET_FROM_DISCOGS         — JSON string of env vars for from-discogs
+#   SECRET_TO_SPOTIFY           — JSON string of env vars for to-spotify
+#   SECRET_SORT_PLAYLISTS       — JSON string of env vars for sort-playlists
+
+name: Terraform
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_DIR: terraform
+  AWS_REGION: eu-west-1
+  TF_VAR_secret_from_youtube: ${{ secrets.SECRET_FROM_YOUTUBE }}
+  TF_VAR_secret_from_discogs: ${{ secrets.SECRET_FROM_DISCOGS }}
+  TF_VAR_secret_to_spotify: ${{ secrets.SECRET_TO_SPOTIFY }}
+  TF_VAR_secret_sort_playlists: ${{ secrets.SECRET_SORT_PLAYLISTS }}
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Post plan to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show Plan</summary>
+
+            \`\`\`
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Fail on plan error
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve

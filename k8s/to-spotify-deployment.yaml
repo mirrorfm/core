@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: to-spotify
+  namespace: mirrorfm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: to-spotify
+  template:
+    metadata:
+      labels:
+        app: to-spotify
+    spec:
+      containers:
+        - name: to-spotify
+          image: mirrorfm-core:latest
+          imagePullPolicy: Never
+          command: ["/app/loop.sh"]
+          args: ["python", "/app/to-spotify/main.py"]
+          env:
+            - name: LOOP_INTERVAL
+              value: "60"
+          envFrom:
+            - secretRef:
+                name: to-spotify-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

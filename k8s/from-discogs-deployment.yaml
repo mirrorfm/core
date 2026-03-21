@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: from-discogs
+  namespace: mirrorfm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: from-discogs
+  template:
+    metadata:
+      labels:
+        app: from-discogs
+    spec:
+      containers:
+        - name: from-discogs
+          image: mirrorfm-core:latest
+          imagePullPolicy: Never
+          command: ["/app/loop.sh"]
+          args: ["/app/from-discogs/from-discogs"]
+          env:
+            - name: LOOP_INTERVAL
+              value: "60"
+          envFrom:
+            - secretRef:
+                name: from-discogs-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

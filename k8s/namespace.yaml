@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mirrorfm
+  labels:
+    managed-by: homeplane
+    app: mirrorfm-core

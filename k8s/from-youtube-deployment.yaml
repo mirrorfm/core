@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: from-youtube
+  namespace: mirrorfm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: from-youtube
+  template:
+    metadata:
+      labels:
+        app: from-youtube
+    spec:
+      containers:
+        - name: from-youtube
+          image: mirrorfm-core:latest
+          imagePullPolicy: Never
+          command: ["/app/loop.sh"]
+          args: ["python", "/app/from-youtube/main.py"]
+          env:
+            - name: LOOP_INTERVAL
+              value: "60"
+          envFrom:
+            - secretRef:
+                name: from-youtube-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

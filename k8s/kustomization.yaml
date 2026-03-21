@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - from-youtube-external-secret.yaml
+  - from-youtube-deployment.yaml
+  - from-discogs-external-secret.yaml
+  - from-discogs-deployment.yaml
+  - to-spotify-external-secret.yaml
+  - to-spotify-deployment.yaml
+  - sort-playlists-external-secret.yaml
+  - sort-playlists-cronjob.yaml

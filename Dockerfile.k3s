@@ -1,0 +1,48 @@
+# Multi-stage Dockerfile for running mirror.fm workers on k3s.
+# Builds all 4 functions into a single image.
+# Each k8s workload uses a different command to run its function.
+
+# --- Stage 1: Build Go binaries ---
+FROM golang:1.21 AS go-builder
+
+# from-discogs
+WORKDIR /build/from-discogs
+COPY functions/from-discogs/go.mod functions/from-discogs/go.sum ./
+RUN go mod download
+COPY functions/from-discogs/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/from-discogs
+
+# sort-playlists
+WORKDIR /build/sort-playlists
+COPY functions/sort-playlists/go.mod functions/sort-playlists/go.sum ./
+RUN go mod download
+COPY functions/sort-playlists/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sort-playlists
+
+# --- Stage 2: Python runtime with Go binaries ---
+FROM python:3.9-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git gcc && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (both functions share the image)
+COPY functions/from-youtube/requirements.txt /tmp/from-youtube-req.txt
+COPY functions/to-spotify/requirements.txt /tmp/to-spotify-req.txt
+RUN pip install --no-cache-dir \
+    -r /tmp/from-youtube-req.txt \
+    -r /tmp/to-spotify-req.txt && \
+    rm /tmp/*-req.txt
+
+# Copy Python function code
+COPY functions/from-youtube/ /app/from-youtube/
+COPY functions/to-spotify/ /app/to-spotify/
+
+# Copy Go binaries
+COPY --from=go-builder /out/from-discogs /app/from-discogs/from-discogs
+COPY --from=go-builder /out/sort-playlists /app/sort-playlists/sort-playlists
+
+# Copy loop wrapper
+COPY scripts/loop.sh /app/loop.sh
+RUN chmod +x /app/loop.sh
+
+WORKDIR /app

@@ -1,0 +1,56 @@
+# Builds all mirror.fm worker functions into a single image,
+# imports it into k3s, and registers with ArgoCD.
+#
+# This is a multi-function variant of the homeplane deploy contract.
+# ArgoCD watches k8s/ for 3 Deployments + 1 CronJob.
+
+name: Deploy to k3s
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t mirrorfm-core:latest -f Dockerfile.k3s .
+
+      - name: Import into k3s
+        run: docker save mirrorfm-core:latest | sudo k3s ctr images import -
+
+      - name: Register with ArgoCD
+        run: |
+          kubectl apply -f - <<EOF
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: mirrorfm-core
+            namespace: argocd
+          spec:
+            project: default
+            source:
+              repoURL: https://github.com/mirrorfm/core.git
+              targetRevision: master
+              path: k8s
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: mirrorfm
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+          EOF
+
+      - name: Restart deployments
+        run: |
+          for deploy in from-youtube from-discogs to-spotify; do
+            kubectl rollout restart deployment/${deploy} -n mirrorfm || true
+          done
+          echo "Deploy complete. CronJob sort-playlists will use new image on next run."
