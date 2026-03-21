@@ -79,18 +79,24 @@ func init() {
 	})
 
 	r.GET("/channels", func(c *gin.Context) {
+		params := parsePaginationParams(c)
 		totalTracks, err := client.getTableCount(client.DynamoDBTracksTable)
 		handleAPIError(c, err)
 		foundTracks, err := client.getTableCount(client.DynamoDBDuplicateTracksTable)
 		handleAPIError(c, err)
-		channels, err := client.getYoutubeChannels("c.id", "ASC", entityLimit, genreLimit)
+		channels, totalCount, err := client.getYoutubeChannelsPaginated(params, genreLimit)
+		handleAPIError(c, err)
+		allGenres, err := client.getDistinctGenres("yt_genres")
 		handleAPIError(c, err)
 
 		c.JSON(200, gin.H{
-			"youtube":        channels,
-			"total_channels": len(channels),
-			"total_tracks":   totalTracks,
-			"found_tracks":   foundTracks,
+			"youtube":      channels,
+			"total_count":  totalCount,
+			"page":         params.Page,
+			"per_page":     params.PerPage,
+			"total_tracks": totalTracks,
+			"found_tracks": foundTracks,
+			"all_genres":   allGenres,
 		})
 	})
 
@@ -104,6 +110,7 @@ func init() {
 	})
 
 	r.GET("/labels", func(c *gin.Context) {
+		params := parsePaginationParams(c)
 		totalTracks, err := client.getTableCount(client.DynamoDBTracksTable)
 		if err != nil {
 			handleAPIError(c, errors.Wrap(err, "couldn't get table count"))
@@ -114,17 +121,25 @@ func init() {
 			handleAPIError(c, errors.Wrap(err, "couldn't get found tracks"))
 			return
 		}
-		labels, err := client.getDiscogsLabels("l.id", "ASC", entityLimit, genreLimit)
+		labels, totalCount, err := client.getDiscogsLabelsPaginated(params, genreLimit)
 		if err != nil {
 			handleAPIError(c, errors.Wrap(err, "couldn't get discogs labels"))
+			return
+		}
+		allGenres, err := client.getDistinctGenres("yt_genres")
+		if err != nil {
+			handleAPIError(c, errors.Wrap(err, "couldn't get genres"))
 			return
 		}
 
 		c.JSON(200, gin.H{
 			"discogs":      labels,
-			"total_labels": len(labels),
+			"total_count":  totalCount,
+			"page":         params.Page,
+			"per_page":     params.PerPage,
 			"total_tracks": totalTracks,
 			"found_tracks": foundTracks,
+			"all_genres":   allGenres,
 		})
 	})
 

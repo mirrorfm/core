@@ -6,11 +6,63 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+	"github.com/gin-gonic/gin"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+type PaginationParams struct {
+	Page    int
+	PerPage int
+	Sort    string
+	Order   string
+	Search  string
+}
+
+var channelSortColumns = map[string]string{
+	"followers": "count_followers",
+	"added":     "c.added_datetime",
+	"tracks":    "count_tracks",
+	"updated":   "last_found_time",
+}
+
+var labelSortColumns = map[string]string{
+	"followers": "count_followers",
+	"added":     "l.added_datetime",
+	"tracks":    "count_tracks",
+	"updated":   "last_found_time",
+}
+
+func parsePaginationParams(c *gin.Context) PaginationParams {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "30"))
+	if perPage < 1 {
+		perPage = 1
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+	sortParam := c.DefaultQuery("sort", "followers")
+	order := strings.ToUpper(c.DefaultQuery("order", "DESC"))
+	if order != "ASC" && order != "DESC" {
+		order = "DESC"
+	}
+	search := c.DefaultQuery("search", "")
+
+	return PaginationParams{
+		Page:    page,
+		PerPage: perPage,
+		Sort:    sortParam,
+		Order:   order,
+		Search:  search,
+	}
+}
 
 type Genre struct {
 	Name  string `json:"name" dynamodbav:"genre_name"`
@@ -264,6 +316,209 @@ func (c *Client) getDiscogsLabels(orderBy, order string, limit, limitGenres int)
 		res = append(res, la)
 	}
 	return res, nil
+}
+
+func (c *Client) getYoutubeChannelsPaginated(params PaginationParams, limitGenres int) ([]YoutubeChannel, int, error) {
+	sortCol, ok := channelSortColumns[params.Sort]
+	if !ok {
+		sortCol = "count_followers"
+	}
+	offset := (params.Page - 1) * params.PerPage
+	escapedSearch := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(params.Search)
+
+	// Count query
+	countQuery := `SELECT COUNT(DISTINCT c.id) FROM yt_channels as c
+		INNER JOIN yt_playlists p on c.channel_id = p.channel_id`
+	var countArgs []interface{}
+	if escapedSearch != "" {
+		countQuery += ` WHERE c.channel_name LIKE ?`
+		countArgs = append(countArgs, "%"+escapedSearch+"%")
+	}
+	var totalCount int
+	err := c.SQLDriver.QueryRow(countQuery, countArgs...).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Data query
+	query := fmt.Sprintf(`
+		SELECT
+			c.id, c.channel_id, c.channel_name, c.count_tracks as count_tracks,
+			c.last_upload_datetime, c.thumbnail_medium, c.upload_playlist_id,
+			c.terminated_datetime, c.added_datetime,
+			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
+			p.last_found_time as last_found_time
+		FROM yt_channels as c
+		INNER JOIN yt_playlists p on c.channel_id = p.channel_id`)
+	var args []interface{}
+	if escapedSearch != "" {
+		query += ` WHERE c.channel_name LIKE ?`
+		args = append(args, "%"+escapedSearch+"%")
+	}
+	query += fmt.Sprintf(` GROUP BY id ORDER BY %s %s LIMIT ? OFFSET ?`, sortCol, params.Order)
+	args = append(args, params.PerPage, offset)
+
+	selDB, err := c.SQLDriver.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var res []YoutubeChannel
+	var ids []interface{}
+	var ch YoutubeChannel
+	for selDB.Next() {
+		err = selDB.Scan(
+			&ch.ID, &ch.ChannelId, &ch.ChannelName, &ch.CountTracks,
+			&ch.LastUploadDatetime, &ch.ThumbnailMedium, &ch.UploadPlaylistId,
+			&ch.TerminatedDatetime, &ch.AddedDatetime,
+			&ch.PlaylistId, &ch.FoundTracks, &ch.CountFollowers, &ch.LastFoundTime)
+		if err != nil {
+			return nil, 0, err
+		}
+		ch.Genres = nil
+		res = append(res, ch)
+		ids = append(ids, ch.ID)
+	}
+
+	// Batch fetch genres
+	if len(ids) > 0 {
+		genreMap, err := c.getEntityGenresBatch(ids, limitGenres)
+		if err != nil {
+			return nil, 0, err
+		}
+		for i := range res {
+			if genres, ok := genreMap[res[i].ID]; ok {
+				res[i].Genres = genres
+			}
+		}
+	}
+
+	return res, totalCount, nil
+}
+
+func (c *Client) getDiscogsLabelsPaginated(params PaginationParams, limitGenres int) ([]DiscogsLabel, int, error) {
+	sortCol, ok := labelSortColumns[params.Sort]
+	if !ok {
+		sortCol = "count_followers"
+	}
+	offset := (params.Page - 1) * params.PerPage
+	escapedSearch := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(params.Search)
+
+	// Count query
+	countQuery := `SELECT COUNT(DISTINCT l.id) FROM dg_labels as l
+		INNER JOIN dg_playlists p on l.label_id = p.label_id`
+	var countArgs []interface{}
+	if escapedSearch != "" {
+		countQuery += ` WHERE l.label_name LIKE ?`
+		countArgs = append(countArgs, "%"+escapedSearch+"%")
+	}
+	var totalCount int
+	err := c.SQLDriver.QueryRow(countQuery, countArgs...).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Data query
+	query := fmt.Sprintf(`
+		SELECT
+			l.id, l.label_id, l.label_name, l.count_tracks as count_tracks,
+			l.thumbnail_medium, l.added_datetime,
+			p.spotify_playlist, p.found_tracks, p.count_followers as count_followers,
+			p.last_found_time as last_found_time
+		FROM dg_labels as l
+		INNER JOIN dg_playlists p on l.label_id = p.label_id`)
+	var args []interface{}
+	if escapedSearch != "" {
+		query += ` WHERE l.label_name LIKE ?`
+		args = append(args, "%"+escapedSearch+"%")
+	}
+	query += fmt.Sprintf(` GROUP BY id ORDER BY %s %s LIMIT ? OFFSET ?`, sortCol, params.Order)
+	args = append(args, params.PerPage, offset)
+
+	selDB, err := c.SQLDriver.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var res []DiscogsLabel
+	var ids []interface{}
+	var la DiscogsLabel
+	for selDB.Next() {
+		err = selDB.Scan(
+			&la.ID, &la.LabelId, &la.LabelName, &la.FoundTracks,
+			&la.ThumbnailMedium, &la.AddedDatetime,
+			&la.PlaylistId, &la.CountTracks, &la.CountFollowers, &la.LastFoundTime)
+		if err != nil {
+			return nil, 0, err
+		}
+		la.Genres = nil
+		res = append(res, la)
+		ids = append(ids, la.ID)
+	}
+
+	// Batch fetch genres
+	if len(ids) > 0 {
+		genreMap, err := c.getEntityGenresBatch(ids, limitGenres)
+		if err != nil {
+			return nil, 0, err
+		}
+		for i := range res {
+			if genres, ok := genreMap[res[i].ID]; ok {
+				res[i].Genres = genres
+			}
+		}
+	}
+
+	return res, totalCount, nil
+}
+
+func (c *Client) getEntityGenresBatch(ids []interface{}, limitGenres int) (map[int][]Genre, error) {
+	placeholders := make([]string, len(ids))
+	for i := range ids {
+		placeholders[i] = "?"
+	}
+	query := fmt.Sprintf(`
+		SELECT yt_channel_id, genre_name, count
+		FROM yt_genres
+		WHERE yt_channel_id IN (%s)
+		ORDER BY yt_channel_id, count DESC`, strings.Join(placeholders, ","))
+
+	rows, err := c.SQLDriver.Query(query, ids...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[int][]Genre)
+	var entityId int
+	var g Genre
+	for rows.Next() {
+		err = rows.Scan(&entityId, &g.Name, &g.Count)
+		if err != nil {
+			return nil, err
+		}
+		if len(result[entityId]) < limitGenres {
+			result[entityId] = append(result[entityId], g)
+		}
+	}
+	return result, nil
+}
+
+func (c *Client) getDistinctGenres(table string) ([]string, error) {
+	query := fmt.Sprintf(`SELECT DISTINCT genre_name FROM %s ORDER BY genre_name`, table)
+	rows, err := c.SQLDriver.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	var genres []string
+	var name string
+	for rows.Next() {
+		err = rows.Scan(&name)
+		if err != nil {
+			return nil, err
+		}
+		genres = append(genres, name)
+	}
+	return genres, nil
 }
 
 func (c *Client) getDiscogsLabel(labelId string) (la DiscogsLabel, err error) {
