@@ -198,7 +198,7 @@ def handle(event, context):
             print("Set channel as terminated")
         else:
             print("Channel already terminated")
-        return
+        return {"searched": 1, "found": 0}
 
     print(channel_name)
 
@@ -232,7 +232,7 @@ def handle(event, context):
                 ).execute()
             except Exception as e:
                 print(e)
-                return
+                return {"searched": 1, "found": 0}
             for item in response['items']:
                 next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
             if 'nextPageToken' in response:
@@ -254,7 +254,7 @@ def handle(event, context):
                 ).execute()
             except Exception as e:
                 print(e)
-                return
+                return {"searched": 1, "found": 0}
             for item in response['items']:
                 if item['snippet']['type'] == 'upload':
                     next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
@@ -288,8 +288,10 @@ def handle(event, context):
                     [next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'), count_tracks, channel_id])
         res = conn.commit()
         print(res)
+        return {"searched": 1, "found": len(new_items_desc)}
     else:
         print("No new tracks")
+        return {"searched": 1, "found": 0}
 
 
 # Quick local tests

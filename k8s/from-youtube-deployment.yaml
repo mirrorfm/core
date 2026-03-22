@@ -18,8 +18,10 @@ spec:
           image: mirrorfm-from-youtube:latest
           imagePullPolicy: Never
           env:
-            - name: LOOP_INTERVAL
-              value: "60"
+            - name: MIN_INTERVAL
+              value: "1"
+            - name: SHORT_IDLE
+              value: "5"
           envFrom:
             - secretRef:
                 name: from-youtube-secrets

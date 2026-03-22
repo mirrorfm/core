@@ -5,5 +5,5 @@ WORKDIR /app
 COPY functions/from-youtube/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY functions/from-youtube/ .
-COPY scripts/loop.sh /app/loop.sh
-CMD ["/app/loop.sh", "python", "main.py"]
+COPY scripts/k3s_runner.py /app/k3s_runner.py
+CMD ["python", "k3s_runner.py"]
