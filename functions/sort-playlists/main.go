@@ -2,12 +2,15 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
 	_ "github.com/go-sql-driver/mysql"
 	webPlayer "github.com/mirrorfm/spotify-webplayer-token/app"
 	api "github.com/mirrorfm/unofficial-spotify-api/app"
 	"github.com/pkg/errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -59,6 +62,8 @@ func Handler() error {
 		os.Exit(1)
 	}
 	mixedOrderPlaylist := mergeUnique(playlistsByFollowers, playlistsByAddedDatetime)
+
+	app.RepairTerminatedThumbnails(token.AccessToken)
 
 	rootList := api.RootListResponse{}
 
@@ -139,6 +144,65 @@ func GenerateSortOperations(contentItems []api.ContentsItem, playlistId string, 
 	}
 
 	return nil
+}
+
+func (client *App) RepairTerminatedThumbnails(accessToken string) {
+	rows, err := client.SQLDriver.Query(`
+		SELECT e.channel_id, p.spotify_playlist FROM yt_channels e
+		JOIN yt_playlists p ON e.channel_id = p.channel_id AND p.num = 1
+		WHERE e.terminated_datetime IS NOT NULL
+		AND (e.thumbnail_medium LIKE '%yt3.ggpht%' OR e.thumbnail_medium LIKE '%googleusercontent%')
+		LIMIT 20`)
+	if err != nil {
+		fmt.Println("RepairTerminatedThumbnails query error:", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var channelID, playlistID string
+		if err := rows.Scan(&channelID, &playlistID); err != nil {
+			continue
+		}
+		imageURL, err := getSpotifyPlaylistImage(accessToken, playlistID)
+		if err != nil || imageURL == "" {
+			fmt.Printf("[T] Failed to get image for %s: %v\n", channelID, err)
+			continue
+		}
+		_, err = client.SQLDriver.Exec(
+			"UPDATE yt_channels SET thumbnail_medium = ? WHERE channel_id = ?",
+			imageURL, channelID)
+		if err != nil {
+			fmt.Printf("[T] Failed to update thumbnail for %s: %v\n", channelID, err)
+			continue
+		}
+		fmt.Printf("[T] Repaired thumbnail for %s\n", channelID)
+	}
+}
+
+func getSpotifyPlaylistImage(accessToken, playlistID string) (string, error) {
+	req, _ := http.NewRequest("GET",
+		"https://api.spotify.com/v1/playlists/"+playlistID+"?fields=images", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Images []struct {
+			URL string `json:"url"`
+		} `json:"images"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+	if len(result.Images) > 0 {
+		return result.Images[0].URL, nil
+	}
+	return "", nil
 }
 
 func (client *App) GetPlaylistsSortedByAddedDatetime(limit int) ([]string, error) {
