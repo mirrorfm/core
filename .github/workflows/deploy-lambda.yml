@@ -15,6 +15,10 @@ on:
     branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-lambda
+  cancel-in-progress: true
+
 env:
   AWS_REGION: eu-west-1
 

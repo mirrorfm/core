@@ -8,6 +8,10 @@ on:
     branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-k3s
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: self-hosted

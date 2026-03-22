@@ -24,6 +24,10 @@ on:
       - ".github/workflows/terraform.yml"
   workflow_dispatch:
 
+concurrency:
+  group: terraform
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
