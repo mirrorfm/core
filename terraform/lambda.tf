@@ -63,18 +63,24 @@ resource "aws_api_gateway_rest_api" "cloud_api" {
     to-www      = "mirrorfm-to-www"
     from-github = "mirrorfm-from-github"
   }
-  name = each.value
+  name                         = each.value
+  disable_execute_api_endpoint = each.key == "to-www" ? true : false
+}
+
+# Redeployment (needed for disable_execute_api_endpoint to take effect)
+resource "aws_api_gateway_deployment" "to_www" {
+  rest_api_id = aws_api_gateway_rest_api.cloud_api["to-www"].id
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # API Gateway stage with throttling (to-www only)
 resource "aws_api_gateway_stage" "to_www_api" {
   rest_api_id   = aws_api_gateway_rest_api.cloud_api["to-www"].id
   stage_name    = "api"
-  deployment_id = "09hby3"
-
-  lifecycle {
-    ignore_changes = [deployment_id]
-  }
+  deployment_id = aws_api_gateway_deployment.to_www.id
 }
 
 resource "aws_api_gateway_method_settings" "to_www_throttle" {
@@ -87,3 +93,68 @@ resource "aws_api_gateway_method_settings" "to_www_throttle" {
     throttling_burst_limit = 20
   }
 }
+
+# --- Custom domain: api.mirror.fm ---
+
+# Regional ACM cert (API Gateway regional endpoints need cert in same region)
+resource "aws_acm_certificate" "api" {
+  domain_name       = "api.mirror.fm"
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "api_cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = aws_route53_zone.mirror_fm.zone_id
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  certificate_arn         = aws_acm_certificate.api.arn
+  validation_record_fqdns = [for record in aws_route53_record.api_cert_validation : record.fqdn]
+}
+
+# Custom domain name (regional)
+resource "aws_api_gateway_domain_name" "api" {
+  domain_name              = "api.mirror.fm"
+  regional_certificate_arn = aws_acm_certificate_validation.api.certificate_arn
+
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+}
+
+# Map api.mirror.fm/ → to-www API stage "api"
+resource "aws_api_gateway_base_path_mapping" "api" {
+  api_id      = aws_api_gateway_rest_api.cloud_api["to-www"].id
+  stage_name  = aws_api_gateway_stage.to_www_api.stage_name
+  domain_name = aws_api_gateway_domain_name.api.domain_name
+}
+
+# DNS record
+resource "aws_route53_record" "api" {
+  zone_id = aws_route53_zone.mirror_fm.zone_id
+  name    = "api.mirror.fm"
+  type    = "A"
+
+  alias {
+    name                   = aws_api_gateway_domain_name.api.regional_domain_name
+    zone_id                = aws_api_gateway_domain_name.api.regional_zone_id
+    evaluate_target_health = false
+  }
+}
+
