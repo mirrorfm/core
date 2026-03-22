@@ -112,7 +112,7 @@ jobs:
             # Sync env vars from Secrets Manager (same source as k3s)
             SECRET=${SECRET_NAMES[$func]}
             ENV_JSON=$(aws secretsmanager get-secret-value --secret-id ${SECRET} --region eu-west-1 --query SecretString --output text)
-            ENV_VARS=$(echo "$ENV_JSON" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(json.dumps({'Variables': d}))")
+            ENV_VARS=$(echo "$ENV_JSON" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); filtered={k:v for k,v in d.items() if not k.startswith('AWS_')}; print(json.dumps({'Variables': filtered}))")
             aws lambda update-function-configuration \
               --function-name ${LAMBDA} \
               --environment "$ENV_VARS" \
