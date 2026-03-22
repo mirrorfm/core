@@ -53,3 +53,24 @@ jobs:
             kubectl rollout restart deployment/${deploy} -n mirrorfm || true
           done
           echo "Deploy complete. CronJob manage-playlists will use new image on next run."
+
+      - name: Update Lambda fallback images
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: eu-west-1
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          aws ecr get-login-password | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+          for func in from-youtube from-discogs to-spotify; do
+            echo "=== Deploying ${func} to Lambda fallback ==="
+            IMAGE=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${func}:latest
+            docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
+              -t ${func} functions/${func}
+            docker tag ${func}:latest ${IMAGE}
+            docker push ${IMAGE}
+            aws lambda update-function-code \
+              --function-name mirror-fm_${func} \
+              --image-uri ${IMAGE} \
+              --region ${AWS_REGION} || echo "Warning: Lambda update failed for ${func}"
+          done
