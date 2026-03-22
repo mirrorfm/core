@@ -1,37 +1,27 @@
-# One-time imports and moves for existing resources now managed by Terraform.
-# These blocks can be removed after the first successful apply.
+# One-time state moves and imports for resource renames.
+# Can be removed after first successful apply.
 
-# Remove old resource names from state (renamed, not deleted)
-removed {
+# ECR repos: cloud_lambda → lambda (existing cloud repos renamed)
+moved {
   from = aws_ecr_repository.cloud_lambda["to-www"]
-  lifecycle { destroy = false }
+  to   = aws_ecr_repository.lambda["to-www"]
 }
-removed {
+moved {
   from = aws_ecr_repository.cloud_lambda["from-github"]
-  lifecycle { destroy = false }
-}
-removed {
-  from = aws_lambda_function.cloud_lambda["to-www"]
-  lifecycle { destroy = false }
-}
-removed {
-  from = aws_lambda_function.cloud_lambda["from-github"]
-  lifecycle { destroy = false }
-}
-removed {
-  from = aws_lambda_function.cloud_lambda["to-www"]
-  lifecycle { destroy = false }
+  to   = aws_ecr_repository.lambda["from-github"]
 }
 
-# ECR repositories
-import {
-  to = aws_ecr_repository.lambda["to-www"]
-  id = "to-www"
+# Cloud Lambdas: cloud_lambda → cloud (resource renamed)
+moved {
+  from = aws_lambda_function.cloud_lambda["to-www"]
+  to   = aws_lambda_function.cloud["to-www"]
 }
-import {
-  to = aws_ecr_repository.lambda["from-github"]
-  id = "from-github"
+moved {
+  from = aws_lambda_function.cloud_lambda["from-github"]
+  to   = aws_lambda_function.cloud["from-github"]
 }
+
+# Import ECR repos for fallback functions (created outside TF)
 import {
   to = aws_ecr_repository.lambda["from-youtube"]
   id = "from-youtube"
@@ -49,17 +39,7 @@ import {
   id = "manage-playlists"
 }
 
-# Cloud Lambda functions (renamed from cloud_lambda to cloud)
-import {
-  to = aws_lambda_function.cloud["to-www"]
-  id = "mirror-fm_to-www"
-}
-import {
-  to = aws_lambda_function.cloud["from-github"]
-  id = "mirror-fm_from-github"
-}
-
-# Fallback Lambda functions
+# Import fallback Lambda functions (created outside TF)
 import {
   to = aws_lambda_function.fallback["from-youtube"]
   id = "mirror-fm_from-youtube"
