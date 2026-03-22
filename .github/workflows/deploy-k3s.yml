@@ -18,7 +18,7 @@ jobs:
         run: |
           for func in from-youtube from-discogs to-spotify manage-playlists; do
             echo "=== Building mirrorfm-${func} ==="
-            docker build -t mirrorfm-${func}:latest -f Dockerfile.${func} .
+            docker build -t mirrorfm-${func}:latest -f functions/${func}/Dockerfile.k8s .
             docker save mirrorfm-${func}:latest | sudo k3s ctr images import -
           done
 
@@ -66,7 +66,7 @@ jobs:
             echo "=== Deploying ${func} to Lambda fallback ==="
             IMAGE=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${func}:latest
             docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
-              -t ${func} functions/${func}
+              -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
             docker tag ${func}:latest ${IMAGE}
             docker push ${IMAGE}
             aws lambda update-function-code \
