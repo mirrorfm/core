@@ -4,18 +4,9 @@
 
 locals {
   sqs_queues = {
-    from-youtube = {
-      sns_topic_name = "mirrorfm_incoming_youtube_channel"
-      lambda_name    = "mirror-fm_from-youtube"
-    }
-    from-discogs = {
-      sns_topic_name = "mirrorfm_incoming_discogs_label"
-      lambda_name    = "mirror-fm_from-discogs"
-    }
-    to-spotify = {
-      sns_topic_name = null # no SNS — fed by from-youtube/from-discogs code
-      lambda_name    = "mirror-fm_to-spotify"
-    }
+    from-youtube = { sns_topic_name = "mirrorfm_incoming_youtube_channel" }
+    from-discogs = { sns_topic_name = "mirrorfm_incoming_discogs_label" }
+    to-spotify   = { sns_topic_name = null } # no SNS — fed by from-youtube/from-discogs code
   }
 }
 
@@ -84,7 +75,7 @@ resource "aws_sqs_queue_policy" "allow_sns" {
 resource "aws_lambda_event_source_mapping" "sqs_to_lambda" {
   for_each         = local.sqs_queues
   event_source_arn = aws_sqs_queue.function_queue[each.key].arn
-  function_name    = each.value.lambda_name
+  function_name    = aws_lambda_function.fallback[each.key].function_name
   batch_size       = 1
   enabled          = false
 

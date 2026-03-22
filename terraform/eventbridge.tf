@@ -6,16 +6,11 @@
 
 locals {
   fallback_schedules = {
-    from-youtube   = "rate(15 minutes)"
-    from-discogs   = "rate(15 minutes)"
-    to-spotify     = "rate(10 minutes)"
+    from-youtube     = "rate(15 minutes)"
+    from-discogs     = "rate(15 minutes)"
+    to-spotify       = "rate(10 minutes)"
     manage-playlists = "rate(4 hours)"
   }
-}
-
-data "aws_lambda_function" "functions" {
-  for_each      = var.lambda_function_names
-  function_name = each.value
 }
 
 resource "aws_cloudwatch_event_rule" "fallback" {
@@ -29,14 +24,14 @@ resource "aws_cloudwatch_event_rule" "fallback" {
 resource "aws_cloudwatch_event_target" "fallback" {
   for_each = local.fallback_schedules
   rule     = aws_cloudwatch_event_rule.fallback[each.key].name
-  arn      = data.aws_lambda_function.functions[each.key].arn
+  arn      = aws_lambda_function.fallback[each.key].arn
 }
 
 resource "aws_lambda_permission" "fallback" {
   for_each      = local.fallback_schedules
   statement_id  = "AllowEventBridgeFallback"
   action        = "lambda:InvokeFunction"
-  function_name = data.aws_lambda_function.functions[each.key].function_name
+  function_name = aws_lambda_function.fallback[each.key].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.fallback[each.key].arn
 }

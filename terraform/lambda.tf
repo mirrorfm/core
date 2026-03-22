@@ -1,6 +1,6 @@
-# Cloud Lambda functions (to-www, from-github).
-# These stay on AWS — not migrated to k3s.
-# Imported from existing resources.
+# All Lambda functions and ECR repositories.
+# Cloud-only (to-www, from-github): always active.
+# Fallback (from-youtube, from-discogs, to-spotify, manage-playlists): for k3s failover.
 
 data "aws_caller_identity" "current" {}
 
@@ -8,6 +8,7 @@ locals {
   aws_account_id = data.aws_caller_identity.current.account_id
   aws_region     = "eu-west-1"
 
+  # Cloud-only Lambda functions (always on AWS)
   cloud_lambdas = {
     to-www = {
       memory_size = 128
@@ -18,11 +19,30 @@ locals {
       timeout     = 3
     }
   }
+
+  # Fallback Lambda functions (k3s primary, Lambda failover)
+  fallback_lambdas = {
+    from-youtube     = { memory_size = 128, timeout = 240 }
+    from-discogs     = { memory_size = 128, timeout = 240 }
+    to-spotify       = { memory_size = 128, timeout = 240 }
+    manage-playlists = { memory_size = 512, timeout = 300 }
+  }
+
+  all_lambdas = merge(local.cloud_lambdas, local.fallback_lambdas)
+
+  # Env vars from Secrets Manager (only set when manage_secret_values is true)
+  fallback_env_vars = var.manage_secret_values ? {
+    from-youtube     = { for k, v in jsondecode(var.secret_from_youtube) : k => v if !startswith(k, "AWS_") }
+    from-discogs     = { for k, v in jsondecode(var.secret_from_discogs) : k => v if !startswith(k, "AWS_") }
+    to-spotify       = { for k, v in jsondecode(var.secret_to_spotify) : k => v if !startswith(k, "AWS_") }
+    manage-playlists = { for k, v in jsondecode(var.secret_manage_playlists) : k => v if !startswith(k, "AWS_") }
+  } : {}
 }
 
-# ECR repositories
-resource "aws_ecr_repository" "cloud_lambda" {
-  for_each             = local.cloud_lambdas
+# --- ECR Repositories (all functions) ---
+
+resource "aws_ecr_repository" "lambda" {
+  for_each             = local.all_lambdas
   name                 = each.key
   image_tag_mutability = "MUTABLE"
   force_delete         = false
@@ -32,18 +52,30 @@ resource "aws_ecr_repository" "cloud_lambda" {
   }
 }
 
-# IAM role (shared by all mirror.fm Lambda functions)
+# --- IAM role (shared by all mirror.fm Lambda functions) ---
+
 data "aws_iam_role" "lambda_role" {
   name = "mirror-fm_lambda_function"
 }
 
-# Lambda functions
-resource "aws_lambda_function" "cloud_lambda" {
+# --- Resolve latest ECR image digests ---
+
+data "aws_ecr_image" "latest" {
+  for_each        = local.all_lambdas
+  repository_name = each.key
+  image_tag       = "latest"
+
+  depends_on = [aws_ecr_repository.lambda]
+}
+
+# --- Cloud Lambda functions ---
+
+resource "aws_lambda_function" "cloud" {
   for_each      = local.cloud_lambdas
   function_name = "mirror-fm_${each.key}"
   role          = data.aws_iam_role.lambda_role.arn
   package_type  = "Image"
-  image_uri     = "${aws_ecr_repository.cloud_lambda[each.key].repository_url}:latest"
+  image_uri     = "${aws_ecr_repository.lambda[each.key].repository_url}@${data.aws_ecr_image.latest[each.key].image_digest}"
   architectures = ["arm64"]
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
@@ -53,11 +85,32 @@ resource "aws_lambda_function" "cloud_lambda" {
   }
 
   lifecycle {
-    ignore_changes = [image_uri, environment]
+    ignore_changes = [environment]
   }
 }
 
-# API Gateway REST APIs
+# --- Fallback Lambda functions ---
+
+resource "aws_lambda_function" "fallback" {
+  for_each      = local.fallback_lambdas
+  function_name = "mirror-fm_${each.key}"
+  role          = data.aws_iam_role.lambda_role.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.lambda[each.key].repository_url}@${data.aws_ecr_image.latest[each.key].image_digest}"
+  architectures = ["arm64"]
+  memory_size   = each.value.memory_size
+  timeout       = each.value.timeout
+
+  dynamic "environment" {
+    for_each = contains(keys(local.fallback_env_vars), each.key) ? [1] : []
+    content {
+      variables = local.fallback_env_vars[each.key]
+    }
+  }
+}
+
+# --- API Gateway REST APIs ---
+
 resource "aws_api_gateway_rest_api" "cloud_api" {
   for_each = {
     to-www      = "mirrorfm-to-www"
@@ -157,4 +210,3 @@ resource "aws_route53_record" "api" {
     evaluate_target_health = false
   }
 }
-

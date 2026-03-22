@@ -1,5 +1,8 @@
-# Builds and deploys cloud Lambda functions (to-www, from-github) to ECR.
-# Triggers on push to master when function code changes.
+# Builds Docker images for all Lambda functions and pushes to ECR.
+# Terraform (triggered at the end) updates the Lambda functions.
+#
+# Cloud-only: to-www, from-github (always active)
+# Fallback: from-youtube, from-discogs, to-spotify, manage-playlists (for k3s failover)
 #
 # Requires GitHub secrets:
 #   AWS_ACCESS_KEY_ID
@@ -10,23 +13,19 @@ name: Deploy Lambda
 on:
   push:
     branches: [master]
-    paths:
-      - "functions/to-www/**"
-      - "functions/from-github/**"
-      - ".github/workflows/deploy-lambda.yml"
   workflow_dispatch:
 
 env:
   AWS_REGION: eu-west-1
 
 jobs:
-  deploy:
+  build-cloud:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         function: [to-www, from-github]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check if function changed
         id: check
@@ -44,7 +43,7 @@ jobs:
 
       - name: Configure AWS credentials
         if: steps.check.outputs.changed == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -59,7 +58,7 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
-      - name: Build, push, and deploy
+      - name: Build and push to ECR
         if: steps.check.outputs.changed == 'true'
         run: |
           IMAGE=${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.function }}:latest
@@ -67,8 +66,55 @@ jobs:
             -t ${{ matrix.function }} functions/${{ matrix.function }}
           docker tag ${{ matrix.function }}:latest $IMAGE
           docker push $IMAGE
-          aws lambda update-function-code \
-            --function-name mirror-fm_${{ matrix.function }} \
-            --image-uri $IMAGE \
-            --region ${{ env.AWS_REGION }}
-          echo "Deployed mirror-fm_${{ matrix.function }}"
+          echo "Pushed ${{ matrix.function }}"
+
+  build-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU for arm64 builds
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS account ID
+        id: aws
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build and push fallback images to ECR
+        run: |
+          ACCOUNT_ID=${{ steps.aws.outputs.account_id }}
+          for func in from-youtube from-discogs to-spotify manage-playlists; do
+            echo "=== Building ${func} ==="
+            IMAGE=${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${func}:latest
+            docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
+              -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
+            docker tag ${func}:latest ${IMAGE}
+            docker push ${IMAGE}
+            echo "Pushed ${func}"
+          done
+
+  apply-terraform:
+    needs: [build-cloud, build-fallback]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Trigger Terraform apply
+        run: gh workflow run terraform.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
