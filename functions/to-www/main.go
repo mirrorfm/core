@@ -22,7 +22,10 @@ type Client struct {
 	DynamoDBEventsTable          string
 	DynamoDBTracksTable          string
 	DynamoDBDuplicateTracksTable string
+	DynamoDBInterestsTable       string
 	SQLDriver                    *sql.DB
+	SpotifyClientID              string
+	SpotifyClientSecret          string
 }
 
 const (
@@ -64,7 +67,10 @@ func init() {
 		DynamoDBEventsTable:          "mirrorfm_events",
 		DynamoDBTracksTable:          "mirrorfm_yt_tracks",
 		DynamoDBDuplicateTracksTable: "mirrorfm_yt_duplicates",
+		DynamoDBInterestsTable:       "mirrorfm_interests",
 		SQLDriver:                    sqlDriver,
+		SpotifyClientID:              os.Getenv("SPOTIFY_CLIENT_ID"),
+		SpotifyClientSecret:          os.Getenv("SPOTIFY_CLIENT_SECRET"),
 	}
 
 	if err != nil {
@@ -155,6 +161,14 @@ func init() {
 		})
 	})
 
+	r.POST("/submit/analyze", func(c *gin.Context) {
+		client.handleAnalyze(c)
+	})
+
+	r.POST("/submit/interest", func(c *gin.Context) {
+		client.handleInterest(c)
+	})
+
 	r.GET("/home", func(c *gin.Context) {
 		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
 		handleAPIError(c, err)
@@ -207,6 +221,11 @@ func cors(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 	} else {
 		c.Header("Access-Control-Allow-Origin", "https://mirror.fm")
+	}
+
+	if c.Request.Method == "OPTIONS" {
+		c.AbortWithStatus(204)
+		return
 	}
 }
 
