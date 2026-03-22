@@ -208,7 +208,7 @@ def get_spotify():
         raise (Exception('null token_info'))
     store_spotify_token(token_info)
 
-    return spotipy.Spotify(auth=token_info['access_token'])
+    return spotipy.Spotify(auth=token_info['access_token'], retries=3, status_retries=3)
 
 
 def find_youtube_track_on_spotify(handler, track_name):
@@ -604,6 +604,30 @@ class Handler(object):
     conn = None
 
 
+def repair_terminated_thumbnails(handler, limit=5):
+    """Replace dead YouTube CDN thumbnails with Spotify playlist covers for terminated channels."""
+    cursor = handler.conn.cursor()
+    cursor.execute(
+        "SELECT e.channel_id, p.spotify_playlist FROM yt_channels e "
+        "JOIN yt_playlists p ON e.channel_id = p.channel_id AND p.num = 1 "
+        "WHERE e.terminated_datetime IS NOT NULL "
+        "AND (e.thumbnail_medium LIKE '%%yt3.ggpht%%' OR e.thumbnail_medium LIKE '%%googleusercontent%%') "
+        "LIMIT %s", (limit,))
+    rows = cursor.fetchall()
+    for row in rows:
+        try:
+            pl = handler.sp.playlist(row['spotify_playlist'], fields='images')
+            if pl.get('images'):
+                image_url = pl['images'][0]['url']
+                cursor.execute(
+                    "UPDATE yt_channels SET thumbnail_medium = %s WHERE channel_id = %s",
+                    (image_url, row['channel_id']))
+                print("[T] Repaired thumbnail for %s from Spotify playlist" % row['channel_id'])
+        except Exception as e:
+            print("[T] Failed to repair thumbnail for %s: %s" % (row['channel_id'], e))
+    handler.conn.commit()
+
+
 def handle(event, c):
     handler = Handler()
     handler.sp = get_spotify()
@@ -678,7 +702,9 @@ def handle(event, c):
         # TODO What if the code above updated 2 playlists?
         pl_item, num = get_last_playlist(handler, entity_id)
         if not pl_item:
-            return
+            repair_terminated_thumbnails(handler)
+            handler.conn.close()
+            return {"searched": total_searched, "added": total_added}
 
         pl_id = pl_item['spotify_playlist']
         update_playlist_description(handler, pl_id, entity_aid)
@@ -714,7 +740,11 @@ def handle(event, c):
                            [pl["followers"]["total"], pl_id, num])
 
         handler.conn.commit()
-        handler.conn.close()
+
+    repair_terminated_thumbnails(handler)
+    handler.conn.close()
+
+    return {"searched": total_searched, "added": total_added}
 
 
 if __name__ == "__main__":
