@@ -1,6 +1,6 @@
 module github.com/mirrorfm/mirrorfm/functions/from-github
 
-go 1.21
+go 1.25.0
 
 require (
 	github.com/aws/aws-lambda-go v1.41.0
@@ -13,5 +13,5 @@ require (
 require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	golang.org/x/crypto v0.13.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
 )
