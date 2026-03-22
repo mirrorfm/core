@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"encoding/json"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/cenkalti/backoff/v4"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/irlndts/go-discogs"
@@ -142,6 +144,18 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 		if isLastPage {
 			break
 		}
+	}
+
+	// Notify to-spotify to process this label's tracks
+	if sqsURL := os.Getenv("SQS_TO_SPOTIFY_URL"); sqsURL != "" {
+		sess := session.Must(session.NewSession(&aws.Config{Region: aws.String("eu-west-1")}))
+		sqsClient := sqs.New(sess)
+		body, _ := json.Marshal(map[string]interface{}{"host": "dg", "entity_id": labelId})
+		sqsClient.SendMessage(&sqs.SendMessageInput{
+			QueueUrl:    &sqsURL,
+			MessageBody: aws.String(string(body)),
+		})
+		fmt.Println("Notified to-spotify via SQS")
 	}
 
 	if rowId > 0 {

@@ -23,8 +23,12 @@ import pymysql
 import logging
 logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 
+import json
+
 # DB
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
+sqs_client = boto3.client("sqs", region_name='eu-west-1')
+SQS_TO_SPOTIFY_URL = os.getenv('SQS_TO_SPOTIFY_URL', '')
 mirrorfm_cursors = dynamodb.Table('mirrorfm_cursors')
 mirrorfm_yt_tracks = dynamodb.Table('mirrorfm_yt_tracks')
 
@@ -288,6 +292,12 @@ def handle(event, context):
                     [next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'), count_tracks, channel_id])
         res = conn.commit()
         print(res)
+        # Notify to-spotify to process this channel's tracks
+        if SQS_TO_SPOTIFY_URL and len(new_items_desc) > 0:
+            sqs_client.send_message(
+                QueueUrl=SQS_TO_SPOTIFY_URL,
+                MessageBody=json.dumps({"host": "yt", "entity_id": channel_id}))
+            print("Notified to-spotify via SQS")
         return {"searched": 1, "found": len(new_items_desc)}
     else:
         print("No new tracks")

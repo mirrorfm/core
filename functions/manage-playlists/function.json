@@ -1,5 +1,0 @@
-{
-    "description": "Sort Spotify playlists by total followers",
-    "runtime": "golang",
-    "timeout": 30
-}

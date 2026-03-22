@@ -40,9 +40,16 @@ TRACK_SIMILARITY_EXCLUDES = [
     "radio version",
     "original mix",
     "original version",
-    "club mix",
     "instrumental",
-    "remix"
+    "remix",
+    "extended version",
+    "extended mix",
+    "radio edit",
+    "remastered",
+    "remaster",
+    "short version",
+    "shorter edit",
+    "filtered version",
 ]
 
 
@@ -420,8 +427,15 @@ def similar(a, b):
 
 def spotify_lookup(handler, record, new_track_genres):
     if cats[handler.current_host]['track_parsing_needed']:
-        track_name = record[cats[handler.current_host]['track_name']]
-        spotify_track_info = find_youtube_track_on_spotify(handler, track_name)
+        raw_track_name = record[cats[handler.current_host]['track_name']]
+        spotify_track_info = find_youtube_track_on_spotify(handler, raw_track_name)
+        # Use trackfilter-parsed name for similarity comparison (strips years, video tags, etc.)
+        parsed = split_artist_track(raw_track_name)
+        if parsed and len(parsed) > 1:
+            artists = " ".join(parsed[0]) if isinstance(parsed[0], list) else parsed[0]
+            track_name = artists + " - " + parsed[1]
+        else:
+            track_name = raw_track_name
     else:
         if 'title' in record and record['title'] is None or 'title' not in record:
             # Discogs can have None title
@@ -437,14 +451,21 @@ def spotify_lookup(handler, record, new_track_genres):
     if spotify_track_info and not is_track_duplicate(handler,
                                                      record[cats[handler.current_host]['host_entity_id']],
                                                      spotify_track_info['uri']):
-        found_track = " - ".join([spotify_track_info['artists'][0]['name'], spotify_track_info['name']])
+        spotify_artist = re.sub(r'\s+archived$', '', spotify_track_info['artists'][0]['name'], flags=re.IGNORECASE)
+        found_track = " - ".join([spotify_artist, spotify_track_info['name']])
 
         def sanitize(track):
-            # make track alphanumeric and lowercase
-            # also removes frequent track suffixes such as `Original Mix`
-            track = ''.join(ch for ch in track if ch.isalnum()).lower()
+            # make track lowercase and remove frequent suffixes first (while spaces still present)
+            track = track.lower()
             for sub in TRACK_SIMILARITY_EXCLUDES:
                 track = track.replace(sub, '')
+            # strip featured artist credits for comparison only
+            track = re.sub(r"\(?\b(feat\.?|ft\.?|featuring)\b[^)]*\)?", "", track)
+            # normalize & to space so "Harley & Muscle" matches "Harley&Muscle"
+            track = track.replace('&', ' ')
+            # then strip to alphanumeric and spaces, normalize whitespace
+            track = ''.join(ch for ch in track if ch.isalnum() or ch == ' ')
+            track = ' '.join(track.split())
             return track
 
         similarity = similar(sanitize(track_name), sanitize(found_track))
@@ -625,10 +646,35 @@ def handle(event, c):
 
     total_added = total_searched = 0
 
-    if 'Records' in event and len(event['Records']) > 0:
+    if 'sqs_entity' in event:
+        # Event-driven: process a specific entity from SQS
+        handler.current_host = event['sqs_entity']['host']
+        entity_id = event['sqs_entity']['entity_id']
+        print("Processing entity from SQS: %s %s" % (handler.current_host, entity_id))
+
+        cursor = handler.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM " + cats[handler.current_host]['entity_table'] + " WHERE "
+            + cats[handler.current_host]['entity_id'] + "=%s", entity_id)
+        entity = cursor.fetchone()
+        if not entity:
+            print("Entity not found: %s" % entity_id)
+            return {"searched": 0, "added": 0}
+        entity_aid = entity['id']
+        entity_name = entity[cats[handler.current_host]['entity_name']]
+
+        tracks_to_process = get_next_tracks(handler, entity_id)
+        for record in tracks_to_process['Items']:
+            if 'spotify_uri' not in record:
+                total_searched += 1
+                if spotify_lookup(handler, record, new_track_genres):
+                    total_added += 1
+        save_cursors(handler, tracks_to_process, entity_aid)
+
+    elif 'Records' in event and len(event['Records']) > 0:
         handler.current_host = detect_host(event)
 
-        # New tracks
+        # New tracks from DynamoDB Streams (legacy)
         print("Process %d tracks just added to DynamoDB" % len(event['Records']))
         for record in event['Records']:
             record = record['dynamodb']

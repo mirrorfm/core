@@ -1,5 +1,0 @@
-{
-    "description": "Fetch discogs labels",
-    "runtime": "golang",
-    "timeout": 900
-}
