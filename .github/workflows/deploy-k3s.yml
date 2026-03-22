@@ -1,5 +1,6 @@
 # Builds 4 separate Docker images for mirror.fm workers,
 # imports them into k3s, and syncs via ArgoCD.
+# Also deploys to Lambda as fallback.
 
 name: Deploy to k3s
 
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-k3s:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -54,14 +55,28 @@ jobs:
           done
           echo "Deploy complete. CronJob manage-playlists will use new image on next run."
 
-      - name: Update Lambda fallback images
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: eu-west-1
+  deploy-lambda-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+
+      - name: Get AWS account ID
+        id: aws
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ steps.aws.outputs.account_id }}.dkr.ecr.eu-west-1.amazonaws.com
+
+      - name: Build, push, and update Lambda functions
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          aws ecr get-login-password | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+          ACCOUNT_ID=${{ steps.aws.outputs.account_id }}
           declare -A LAMBDA_NAMES=(
             [from-youtube]=mirror-fm_from-youtube
             [from-discogs]=mirror-fm_from-discogs
@@ -71,7 +86,7 @@ jobs:
           for func in "${!LAMBDA_NAMES[@]}"; do
             LAMBDA=${LAMBDA_NAMES[$func]}
             echo "=== Deploying ${func} to Lambda fallback (${LAMBDA}) ==="
-            IMAGE=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${func}:latest
+            IMAGE=${ACCOUNT_ID}.dkr.ecr.eu-west-1.amazonaws.com/${func}:latest
             docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
               -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
             docker tag ${func}:latest ${IMAGE}
@@ -79,5 +94,5 @@ jobs:
             aws lambda update-function-code \
               --function-name ${LAMBDA} \
               --image-uri ${IMAGE} \
-              --region ${AWS_REGION} || echo "Warning: Lambda update failed for ${func}"
+              --region eu-west-1 || echo "Warning: Lambda update failed for ${func}"
           done
