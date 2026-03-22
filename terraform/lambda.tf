@@ -63,3 +63,25 @@ resource "aws_api_gateway_rest_api" "cloud_api" {
   }
   name = each.value
 }
+
+# API Gateway stage with throttling (to-www only)
+resource "aws_api_gateway_stage" "to_www_api" {
+  rest_api_id   = aws_api_gateway_rest_api.cloud_api["to-www"].id
+  stage_name    = "api"
+  deployment_id = "09hby3"
+
+  lifecycle {
+    ignore_changes = [deployment_id]
+  }
+}
+
+resource "aws_api_gateway_method_settings" "to_www_throttle" {
+  rest_api_id = aws_api_gateway_rest_api.cloud_api["to-www"].id
+  stage_name  = aws_api_gateway_stage.to_www_api.stage_name
+  method_path = "*/*"
+
+  settings {
+    throttling_rate_limit  = 10
+    throttling_burst_limit = 20
+  }
+}
