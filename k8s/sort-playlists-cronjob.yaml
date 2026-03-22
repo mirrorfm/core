@@ -19,7 +19,7 @@ spec:
             - name: sort-playlists
               image: mirrorfm-sort-playlists:latest
               imagePullPolicy: Never
-              command: ["/app/sort-playlists/sort-playlists"]
+              command: ["/app/sort-playlists"]
               envFrom:
                 - secretRef:
                     name: sort-playlists-secrets

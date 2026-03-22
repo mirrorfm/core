@@ -36,7 +36,7 @@ host = os.getenv('DB_HOST')
 
 
 try:
-    conn = pymysql.connect(host,
+    conn = pymysql.connect(host=host,
                            user=name,
                            passwd=password,
                            db=db_name,

@@ -609,7 +609,7 @@ def handle(event, c):
     handler.sp = get_spotify()
 
     try:
-        handler.conn = pymysql.connect(db_host,
+        handler.conn = pymysql.connect(host=db_host,
                                        user=db_username,
                                        passwd=db_password,
                                        db=db_name,
