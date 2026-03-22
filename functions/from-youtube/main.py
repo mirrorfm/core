@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import boto3
 import pymysql
+from trackfilter.cli import split_artist_track
 
 # Hide warnings https://github.com/googleapis/google-api-python-client/issues/299
 import logging
@@ -282,7 +283,8 @@ def handle(event, context):
     print("last_upload_datetime", last_upload_datetime)
 
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
-        count_tracks = old_yt_count_tracks + len(new_items_desc)
+        new_track_count = sum(1 for item in new_items_desc if split_artist_track(str(item['snippet']['title'])))
+        count_tracks = old_yt_count_tracks + new_track_count
         cur = conn.cursor()
         cur.execute('UPDATE yt_channels SET last_upload_datetime = %s, count_tracks = %s WHERE channel_id = %s',
                     [next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'), count_tracks, channel_id])

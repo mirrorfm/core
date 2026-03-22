@@ -4,3 +4,4 @@ uritemplate
 pymysql==1.1.1
 python-dateutil
 boto3
+trackfilter
