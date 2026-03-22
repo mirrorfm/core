@@ -64,6 +64,7 @@ func Handler() error {
 	mixedOrderPlaylist := mergeUnique(playlistsByFollowers, playlistsByAddedDatetime)
 
 	app.RepairTerminatedThumbnails(token.AccessToken)
+	app.ArchiveTerminatedPlaylists(token.AccessToken)
 
 	rootList := api.RootListResponse{}
 
@@ -178,6 +179,79 @@ func (client *App) RepairTerminatedThumbnails(accessToken string) {
 		}
 		fmt.Printf("[T] Repaired thumbnail for %s\n", channelID)
 	}
+}
+
+func (client *App) ArchiveTerminatedPlaylists(accessToken string) {
+	rows, err := client.SQLDriver.Query(`
+		SELECT e.channel_name, p.spotify_playlist FROM yt_channels e
+		JOIN yt_playlists p ON e.channel_id = p.channel_id
+		WHERE e.terminated_datetime IS NOT NULL
+		LIMIT 50`)
+	if err != nil {
+		fmt.Println("ArchiveTerminatedPlaylists query error:", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var channelName, playlistID string
+		if err := rows.Scan(&channelName, &playlistID); err != nil {
+			continue
+		}
+		// Get current playlist name from Spotify
+		name, err := getSpotifyPlaylistName(accessToken, playlistID)
+		if err != nil || name == "" {
+			continue
+		}
+		// Skip if already archived
+		if strings.HasSuffix(name, " (Archive)") {
+			continue
+		}
+		newName := name + " (Archive)"
+		if err := renameSpotifyPlaylist(accessToken, playlistID, newName); err != nil {
+			fmt.Printf("[A] Failed to rename %s: %v\n", playlistID, err)
+			continue
+		}
+		fmt.Printf("[A] Archived playlist: %s -> %s\n", name, newName)
+	}
+}
+
+func getSpotifyPlaylistName(accessToken, playlistID string) (string, error) {
+	req, _ := http.NewRequest("GET",
+		"https://api.spotify.com/v1/playlists/"+playlistID+"?fields=name", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", err
+	}
+	return result.Name, nil
+}
+
+func renameSpotifyPlaylist(accessToken, playlistID, newName string) error {
+	payload, _ := json.Marshal(map[string]string{"name": newName})
+	req, _ := http.NewRequest("PUT",
+		"https://api.spotify.com/v1/playlists/"+playlistID,
+		strings.NewReader(string(payload)))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	}
+	return nil
 }
 
 func getSpotifyPlaylistImage(accessToken, playlistID string) (string, error) {
