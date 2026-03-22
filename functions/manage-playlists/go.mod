@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-lambda-go v1.53.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/mirrorfm/spotify-webplayer-token v1.0.0
-	github.com/mirrorfm/unofficial-spotify-api v0.1.0
+	github.com/mirrorfm/unofficial-spotify-api v1.0.0
 	github.com/pkg/errors v0.9.1
 )
 

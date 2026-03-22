@@ -13,6 +13,8 @@ github.com/mirrorfm/spotify-webplayer-token v1.0.0 h1:DZc5PxbGVwUe8xprsQWzhMrUXS
 github.com/mirrorfm/spotify-webplayer-token v1.0.0/go.mod h1:TllpFjsunLE56Lx3cWNsMSNXX//GcO/Z7duh9wQH71I=
 github.com/mirrorfm/unofficial-spotify-api v0.1.0 h1:0zBcp/xlehW5jS2YdaqRazmBVpFLFrSDZTcT3CH01qg=
 github.com/mirrorfm/unofficial-spotify-api v0.1.0/go.mod h1:0ur4WB5Zg5sAEl0UV1Rg41/5u4GhRKNqbU3cqJCLY1k=
+github.com/mirrorfm/unofficial-spotify-api v1.0.0 h1:ZYI7vpfwVIcoRN6Q8ppG6KjcvfqCacVnyQZc2mE2ibY=
+github.com/mirrorfm/unofficial-spotify-api v1.0.0/go.mod h1:TIga8+7RsTfuMVC/f9GL4vOfh9QshDa2khtHYK4mwGw=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
