@@ -77,7 +77,7 @@ class Memoize:
 PLAYLIST_EXPECTED_MAX_LENGTH = 11000
 WEBSITE = "https://mirror.fm"
 
-BATCH_GET_SIZE = 1000
+BATCH_GET_SIZE = 200
 
 # DB
 client = boto3.client("dynamodb", region_name='eu-west-1')
@@ -208,7 +208,8 @@ def get_spotify():
         raise (Exception('null token_info'))
     store_spotify_token(token_info)
 
-    return spotipy.Spotify(auth=token_info['access_token'], retries=3, status_retries=3)
+    # Use auth_manager instead of static token so spotipy auto-refreshes on 401
+    return spotipy.Spotify(auth_manager=sp_oauth, retries=3, status_retries=3)
 
 
 def find_youtube_track_on_spotify(handler, track_name):
