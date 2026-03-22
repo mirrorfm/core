@@ -8,7 +8,7 @@
 #   SECRET_FROM_YOUTUBE         — JSON string of env vars for from-youtube
 #   SECRET_FROM_DISCOGS         — JSON string of env vars for from-discogs
 #   SECRET_TO_SPOTIFY           — JSON string of env vars for to-spotify
-#   SECRET_SORT_PLAYLISTS       — JSON string of env vars for sort-playlists
+#   SECRET_SORT_PLAYLISTS       — JSON string of env vars for manage-playlists
 
 name: Terraform
 
@@ -34,7 +34,7 @@ env:
   TF_VAR_secret_from_youtube: ${{ secrets.SECRET_FROM_YOUTUBE }}
   TF_VAR_secret_from_discogs: ${{ secrets.SECRET_FROM_DISCOGS }}
   TF_VAR_secret_to_spotify: ${{ secrets.SECRET_TO_SPOTIFY }}
-  TF_VAR_secret_sort_playlists: ${{ secrets.SECRET_SORT_PLAYLISTS }}
+  TF_VAR_secret_manage_playlists: ${{ secrets.SECRET_SORT_PLAYLISTS }}
   TF_VAR_manage_secret_values: "true"
 
 jobs:

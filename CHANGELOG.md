@@ -2,7 +2,7 @@
 
 ## Added
 
-- [sort-playlists] Sort Spotify playlists by total followers
+- [manage-playlists] Sort Spotify playlists by total followers
 
 # 2020-08-12
 

@@ -9,7 +9,7 @@ locals {
     from-youtube   = "rate(15 minutes)"
     from-discogs   = "rate(15 minutes)"
     to-spotify     = "rate(10 minutes)"
-    sort-playlists = "rate(4 hours)"
+    manage-playlists = "rate(4 hours)"
   }
 }
 

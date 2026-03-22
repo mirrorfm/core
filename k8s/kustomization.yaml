@@ -8,5 +8,5 @@ resources:
   - from-discogs-deployment.yaml
   - to-spotify-external-secret.yaml
   - to-spotify-deployment.yaml
-  - sort-playlists-external-secret.yaml
-  - sort-playlists-cronjob.yaml
+  - manage-playlists-external-secret.yaml
+  - manage-playlists-cronjob.yaml

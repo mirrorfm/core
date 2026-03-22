@@ -1,13 +1,13 @@
 setup:
 	npm install json-to-env -g
 
-sort-playlists:
-	cd functions/sort-playlists && json-to-env ./env.json ./env.sh
-	cd functions/sort-playlists && source ./env.sh && rm ./env.sh && go run *.go
+manage-playlists:
+	cd functions/manage-playlists && json-to-env ./env.json ./env.sh
+	cd functions/manage-playlists && source ./env.sh && rm ./env.sh && go run *.go
 
-deploy-sort-playlists:
-	apex build sort-playlists >/dev/null
-	apex deploy sort-playlists --region eu-west-1 -ldebug --env-file ./functions/sort-playlists/env.json
+deploy-manage-playlists:
+	apex build manage-playlists >/dev/null
+	apex deploy manage-playlists --region eu-west-1 -ldebug --env-file ./functions/manage-playlists/env.json
 
 to-spotify:
 	cd functions/to-spotify && source ./env.sh && python3 main.py

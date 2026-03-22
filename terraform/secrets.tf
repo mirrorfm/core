@@ -25,8 +25,8 @@ variable "secret_to_spotify" {
   default     = ""
 }
 
-variable "secret_sort_playlists" {
-  description = "JSON string of env vars for sort-playlists"
+variable "secret_manage_playlists" {
+  description = "JSON string of env vars for manage-playlists"
   type        = string
   sensitive   = true
   default     = ""
@@ -39,12 +39,12 @@ variable "manage_secret_values" {
 }
 
 locals {
-  secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "sort-playlists"])
+  secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "manage-playlists"])
   secrets = {
     from-youtube   = var.secret_from_youtube
     from-discogs   = var.secret_from_discogs
     to-spotify     = var.secret_to_spotify
-    sort-playlists = var.secret_sort_playlists
+    manage-playlists = var.secret_manage_playlists
   }
 }
 

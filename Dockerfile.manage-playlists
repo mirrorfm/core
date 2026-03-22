@@ -1,0 +1,10 @@
+FROM golang:1.24 AS build
+WORKDIR /build
+COPY functions/manage-playlists/go.mod functions/manage-playlists/go.sum ./
+RUN go mod download
+COPY functions/manage-playlists/*.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /manage-playlists
+
+FROM alpine:3.19
+COPY --from=build /manage-playlists /app/manage-playlists
+CMD ["/app/manage-playlists"]

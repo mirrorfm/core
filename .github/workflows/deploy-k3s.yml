@@ -16,7 +16,7 @@ jobs:
 
       - name: Build and import images
         run: |
-          for func in from-youtube from-discogs to-spotify sort-playlists; do
+          for func in from-youtube from-discogs to-spotify manage-playlists; do
             echo "=== Building mirrorfm-${func} ==="
             docker build -t mirrorfm-${func}:latest -f Dockerfile.${func} .
             docker save mirrorfm-${func}:latest | sudo k3s ctr images import -
@@ -52,4 +52,4 @@ jobs:
           for deploy in from-youtube from-discogs to-spotify; do
             kubectl rollout restart deployment/${deploy} -n mirrorfm || true
           done
-          echo "Deploy complete. CronJob sort-playlists will use new image on next run."
+          echo "Deploy complete. CronJob manage-playlists will use new image on next run."
