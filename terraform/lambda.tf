@@ -2,8 +2,10 @@
 # These stay on AWS — not migrated to k3s.
 # Imported from existing resources.
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  aws_account_id = "705440408593"
+  aws_account_id = data.aws_caller_identity.current.account_id
   aws_region     = "eu-west-1"
 
   cloud_lambdas = {

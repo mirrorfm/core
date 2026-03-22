@@ -18,7 +18,6 @@ on:
 
 env:
   AWS_REGION: eu-west-1
-  AWS_ACCOUNT_ID: "705440408593"
 
 jobs:
   deploy:
@@ -51,14 +50,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Get AWS account ID
+        if: steps.check.outputs.changed == 'true'
+        id: aws
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
       - name: Login to ECR
         if: steps.check.outputs.changed == 'true'
-        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
       - name: Build, push, and deploy
         if: steps.check.outputs.changed == 'true'
         run: |
-          IMAGE=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.function }}:latest
+          IMAGE=${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.function }}:latest
           docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
             -t ${{ matrix.function }} functions/${{ matrix.function }}
           docker tag ${{ matrix.function }}:latest $IMAGE
