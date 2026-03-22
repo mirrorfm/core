@@ -62,15 +62,22 @@ jobs:
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           aws ecr get-login-password | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-          for func in from-youtube from-discogs to-spotify; do
-            echo "=== Deploying ${func} to Lambda fallback ==="
+          declare -A LAMBDA_NAMES=(
+            [from-youtube]=mirror-fm_from-youtube
+            [from-discogs]=mirror-fm_from-discogs
+            [to-spotify]=mirror-fm_to-spotify
+            [manage-playlists]=mirror-fm_sort-playlists
+          )
+          for func in "${!LAMBDA_NAMES[@]}"; do
+            LAMBDA=${LAMBDA_NAMES[$func]}
+            echo "=== Deploying ${func} to Lambda fallback (${LAMBDA}) ==="
             IMAGE=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${func}:latest
             docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
               -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
             docker tag ${func}:latest ${IMAGE}
             docker push ${IMAGE}
             aws lambda update-function-code \
-              --function-name mirror-fm_${func} \
+              --function-name ${LAMBDA} \
               --image-uri ${IMAGE} \
               --region ${AWS_REGION} || echo "Warning: Lambda update failed for ${func}"
           done
