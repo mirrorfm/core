@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/dynamodb"
 	_ "github.com/go-sql-driver/mysql"
 	webPlayer "github.com/mirrorfm/spotify-webplayer-token/app"
 	api "github.com/mirrorfm/unofficial-spotify-api/app"
 	"github.com/pkg/errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -36,6 +40,63 @@ func getApp() (App, error) {
 	}, nil
 }
 
+// getSpotifyOAuthToken fetches an OAuth access token using the refresh token stored in DynamoDB.
+func getSpotifyOAuthToken() (string, error) {
+	clientID := os.Getenv("SPOTIPY_CLIENT_ID")
+	clientSecret := os.Getenv("SPOTIPY_CLIENT_SECRET")
+	if clientID == "" || clientSecret == "" {
+		return "", fmt.Errorf("missing SPOTIPY_CLIENT_ID or SPOTIPY_CLIENT_SECRET")
+	}
+
+	sess := session.Must(session.NewSession(&aws.Config{Region: aws.String("eu-west-1")}))
+	svc := dynamodb.New(sess)
+
+	result, err := svc.GetItem(&dynamodb.GetItemInput{
+		TableName: aws.String("mirrorfm_cursors"),
+		Key:       map[string]*dynamodb.AttributeValue{"name": {S: aws.String("token")}},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get token from DynamoDB: %w", err)
+	}
+
+	refreshToken := ""
+	if val, ok := result.Item["value"]; ok && val.M != nil {
+		if rt, ok := val.M["refresh_token"]; ok && rt.S != nil {
+			refreshToken = *rt.S
+		}
+	}
+	if refreshToken == "" {
+		return "", fmt.Errorf("no refresh_token found in DynamoDB")
+	}
+
+	data := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+	}
+
+	resp, err := http.PostForm("https://accounts.spotify.com/api/token", data)
+	if err != nil {
+		return "", fmt.Errorf("token refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("token refresh returned %d: %s", resp.StatusCode, body)
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	return tokenResp.AccessToken, nil
+}
+
 func Handler() error {
 	app, err := getApp()
 	if err != nil {
@@ -52,6 +113,13 @@ func Handler() error {
 		os.Exit(1)
 	}
 
+	// OAuth token for public Spotify API (thumbnails, rename)
+	oauthToken, err := getSpotifyOAuthToken()
+	if err != nil {
+		fmt.Println("Warning: could not get OAuth token:", err)
+		fmt.Println("Thumbnail repair and archive rename will be skipped")
+	}
+
 	limit := 150
 	playlistsByFollowers, err := app.GetPlaylistsSortedByTotalFollowers(limit)
 	if err != nil {
@@ -63,8 +131,10 @@ func Handler() error {
 	}
 	mixedOrderPlaylist := mergeUnique(playlistsByFollowers, playlistsByAddedDatetime)
 
-	app.RepairTerminatedThumbnails(token.AccessToken)
-	app.ArchiveTerminatedPlaylists(token.AccessToken)
+	if oauthToken != "" {
+		app.RepairTerminatedThumbnails(oauthToken)
+		app.ArchiveTerminatedPlaylists(oauthToken)
+	}
 
 	rootList := api.RootListResponse{}
 

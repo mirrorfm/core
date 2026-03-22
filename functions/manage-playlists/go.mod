@@ -10,4 +10,8 @@ require (
 	github.com/pkg/errors v0.9.1
 )
 
-require filippo.io/edwards25519 v1.2.0 // indirect
+require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/aws/aws-sdk-go v1.55.8 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+)
