@@ -85,11 +85,17 @@ jobs:
       - name: Build, push, and update Lambda functions
         run: |
           ACCOUNT_ID=${{ steps.aws.outputs.account_id }}
-          # manage-playlists excluded: Lambda mirror-fm_sort-playlists is still Zip-based
           declare -A LAMBDA_NAMES=(
             [from-youtube]=mirror-fm_from-youtube
             [from-discogs]=mirror-fm_from-discogs
             [to-spotify]=mirror-fm_to-spotify
+            [manage-playlists]=mirror-fm_manage-playlists
+          )
+          declare -A SECRET_NAMES=(
+            [from-youtube]=homeplane/from-youtube
+            [from-discogs]=homeplane/from-discogs
+            [to-spotify]=homeplane/to-spotify
+            [manage-playlists]=homeplane/manage-playlists
           )
           for func in "${!LAMBDA_NAMES[@]}"; do
             LAMBDA=${LAMBDA_NAMES[$func]}
@@ -102,5 +108,14 @@ jobs:
             aws lambda update-function-code \
               --function-name ${LAMBDA} \
               --image-uri ${IMAGE} \
-              --region eu-west-1 || echo "Warning: Lambda update failed for ${func}"
+              --region eu-west-1 || echo "Warning: Lambda code update failed for ${func}"
+            # Sync env vars from Secrets Manager (same source as k3s)
+            SECRET=${SECRET_NAMES[$func]}
+            ENV_JSON=$(aws secretsmanager get-secret-value --secret-id ${SECRET} --region eu-west-1 --query SecretString --output text)
+            ENV_VARS=$(echo "$ENV_JSON" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(json.dumps({'Variables': d}))")
+            aws lambda update-function-configuration \
+              --function-name ${LAMBDA} \
+              --environment "$ENV_VARS" \
+              --region eu-west-1 > /dev/null || echo "Warning: Lambda env update failed for ${func}"
+            echo "Synced env vars for ${func}"
           done

@@ -5,6 +5,6 @@ variable "lambda_function_names" {
     from-youtube   = "mirror-fm_from-youtube"
     from-discogs   = "mirror-fm_from-discogs"
     to-spotify     = "mirror-fm_to-spotify"
-    manage-playlists = "mirror-fm_sort-playlists"
+    manage-playlists = "mirror-fm_manage-playlists"
   }
 }
