@@ -85,11 +85,11 @@ jobs:
       - name: Build, push, and update Lambda functions
         run: |
           ACCOUNT_ID=${{ steps.aws.outputs.account_id }}
+          # manage-playlists excluded: Lambda mirror-fm_sort-playlists is still Zip-based
           declare -A LAMBDA_NAMES=(
             [from-youtube]=mirror-fm_from-youtube
             [from-discogs]=mirror-fm_from-discogs
             [to-spotify]=mirror-fm_to-spotify
-            [manage-playlists]=mirror-fm_sort-playlists
           )
           for func in "${!LAMBDA_NAMES[@]}"; do
             LAMBDA=${LAMBDA_NAMES[$func]}

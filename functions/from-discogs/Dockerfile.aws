@@ -1,6 +1,7 @@
-FROM golang:1.21 as build
+FROM golang:1.26 as build
 WORKDIR /app
 COPY go.mod go.sum ./
+RUN go mod download
 COPY *.go .
 RUN GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o main
 
