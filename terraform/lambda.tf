@@ -13,10 +13,12 @@ locals {
     to-www = {
       memory_size = 128
       timeout     = 35
+      secret_name = null # env vars managed manually for now
     }
     from-github = {
       memory_size = 128
       timeout     = 3
+      secret_name = null
     }
   }
 
@@ -80,10 +82,6 @@ resource "aws_lambda_function" "cloud" {
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
 
-  environment {
-    variables = {}
-  }
-
   lifecycle {
     ignore_changes = [environment]
   }
@@ -107,6 +105,24 @@ resource "aws_lambda_function" "fallback" {
       variables = local.fallback_env_vars[each.key]
     }
   }
+}
+
+# --- API Gateway → Lambda permissions ---
+
+resource "aws_lambda_permission" "api_gateway_to_www" {
+  statement_id  = "AllowAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.cloud["to-www"].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.cloud_api["to-www"].execution_arn}/*/*/*"
+}
+
+resource "aws_lambda_permission" "api_gateway_from_github" {
+  statement_id  = "AllowAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.cloud["from-github"].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.cloud_api["from-github"].execution_arn}/*/*/*"
 }
 
 # --- API Gateway REST APIs ---
