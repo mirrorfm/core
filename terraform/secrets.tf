@@ -1,51 +1,40 @@
-# AWS Secrets Manager secrets for k3s workers.
-# External Secrets Operator syncs these into k8s Secrets.
-#
-# Values come from TF variables (set via TF_VAR_* env vars in GHA,
-# sourced from GitHub Actions secrets). Never hardcoded in code.
+# Secrets management.
+# Shared DB credentials stored in SSM Parameter Store (single source of truth).
+# Function-specific secrets stored in Secrets Manager (for k8s External Secrets).
+# Lambda env vars set from SSM data sources — never in TF plan output.
 
-variable "secret_from_youtube" {
-  description = "JSON string of env vars for from-youtube"
-  type        = string
-  sensitive   = true
-  default     = ""
+# --- SSM Parameters (shared DB credentials) ---
+
+data "aws_ssm_parameter" "db_host" {
+  name = "/mirrorfm/db/host"
 }
 
-variable "secret_from_discogs" {
-  description = "JSON string of env vars for from-discogs"
-  type        = string
-  sensitive   = true
-  default     = ""
+data "aws_ssm_parameter" "db_username" {
+  name = "/mirrorfm/db/username"
 }
 
-variable "secret_to_spotify" {
-  description = "JSON string of env vars for to-spotify"
-  type        = string
-  sensitive   = true
-  default     = ""
+data "aws_ssm_parameter" "db_password" {
+  name            = "/mirrorfm/db/password"
+  with_decryption = true
 }
 
-variable "secret_manage_playlists" {
-  description = "JSON string of env vars for manage-playlists"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
-variable "manage_secret_values" {
-  description = "Whether to manage secret values (set to true in GHA, false for local plans)"
-  type        = bool
-  default     = false
+data "aws_ssm_parameter" "db_name" {
+  name = "/mirrorfm/db/name"
 }
 
 locals {
-  secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "manage-playlists"])
-  secrets = {
-    from-youtube   = var.secret_from_youtube
-    from-discogs   = var.secret_from_discogs
-    to-spotify     = var.secret_to_spotify
-    manage-playlists = var.secret_manage_playlists
+  db_env = {
+    DB_HOST     = data.aws_ssm_parameter.db_host.value
+    DB_USERNAME = data.aws_ssm_parameter.db_username.value
+    DB_PASSWORD = data.aws_ssm_parameter.db_password.value
+    DB_NAME     = data.aws_ssm_parameter.db_name.value
   }
+}
+
+# --- Secrets Manager (function-specific secrets, synced to k8s via ESO) ---
+
+locals {
+  secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "manage-playlists"])
 }
 
 resource "aws_secretsmanager_secret" "function_secrets" {
@@ -53,8 +42,6 @@ resource "aws_secretsmanager_secret" "function_secrets" {
   name     = "homeplane/${each.key}"
 }
 
-resource "aws_secretsmanager_secret_version" "function_secrets" {
-  for_each      = var.manage_secret_values ? local.secret_names : toset([])
-  secret_id     = aws_secretsmanager_secret.function_secrets[each.key].id
-  secret_string = local.secrets[each.key]
-}
+# Secret values are managed outside Terraform (via AWS CLI / scripts).
+# Terraform only creates the secret resources, not their values.
+# This prevents secret values from appearing in TF plan output.

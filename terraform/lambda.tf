@@ -10,16 +10,8 @@ locals {
 
   # Cloud-only Lambda functions (always on AWS)
   cloud_lambdas = {
-    to-www = {
-      memory_size = 128
-      timeout     = 35
-      secret_name = null # env vars managed manually for now
-    }
-    from-github = {
-      memory_size = 128
-      timeout     = 3
-      secret_name = null
-    }
+    to-www      = { memory_size = 128, timeout = 35 }
+    from-github = { memory_size = 128, timeout = 3 }
   }
 
   # Fallback Lambda functions (k3s primary, Lambda failover)
@@ -31,14 +23,6 @@ locals {
   }
 
   all_lambdas = merge(local.cloud_lambdas, local.fallback_lambdas)
-
-  # Env vars from Secrets Manager (only set when manage_secret_values is true)
-  fallback_env_vars = var.manage_secret_values ? {
-    from-youtube     = { for k, v in jsondecode(var.secret_from_youtube) : k => v if !startswith(k, "AWS_") }
-    from-discogs     = { for k, v in jsondecode(var.secret_from_discogs) : k => v if !startswith(k, "AWS_") }
-    to-spotify       = { for k, v in jsondecode(var.secret_to_spotify) : k => v if !startswith(k, "AWS_") }
-    manage-playlists = { for k, v in jsondecode(var.secret_manage_playlists) : k => v if !startswith(k, "AWS_") }
-  } : {}
 }
 
 # --- ECR Repositories (all functions) ---
@@ -82,12 +66,30 @@ resource "aws_lambda_function" "cloud" {
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
 
-  lifecycle {
-    ignore_changes = [environment]
+  environment {
+    variables = local.db_env
   }
 }
 
 # --- Fallback Lambda functions ---
+
+data "aws_secretsmanager_secret_version" "function_secrets" {
+  for_each  = local.secret_names
+  secret_id = aws_secretsmanager_secret.function_secrets[each.key].id
+}
+
+locals {
+  # Merge DB creds (from SSM) with function-specific vars (from Secrets Manager)
+  # Filter out AWS_* and DB_* keys from Secrets Manager (DB comes from SSM)
+  fallback_env_vars = {
+    for name in local.secret_names : name => merge(
+      local.db_env,
+      { for k, v in jsondecode(data.aws_secretsmanager_secret_version.function_secrets[name].secret_string) :
+        k => v if !startswith(k, "AWS_") && !startswith(k, "DB_") && k != "SQS_QUEUE_URL" && k != "SQS_TO_SPOTIFY_URL"
+      }
+    )
+  }
+}
 
 resource "aws_lambda_function" "fallback" {
   for_each      = local.fallback_lambdas
@@ -99,11 +101,8 @@ resource "aws_lambda_function" "fallback" {
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
 
-  dynamic "environment" {
-    for_each = contains(keys(local.fallback_env_vars), each.key) ? [1] : []
-    content {
-      variables = local.fallback_env_vars[each.key]
-    }
+  environment {
+    variables = local.fallback_env_vars[each.key]
   }
 }
 
