@@ -1,5 +1,6 @@
-# Builds 4 separate Docker images for mirror.fm workers,
-# imports them into k3s, and syncs via ArgoCD.
+# Triggers homeplane to build and deploy k3s images.
+# Homeplane's self-hosted runner reads homeplane.yaml, builds all images,
+# imports into k3s, and registers with ArgoCD.
 
 name: Deploy to k3s
 
@@ -14,46 +15,13 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Build and import images
+      - name: Trigger homeplane deploy
         run: |
-          for func in from-youtube from-discogs to-spotify manage-playlists; do
-            echo "=== Building mirrorfm-${func} ==="
-            docker build -t mirrorfm-${func}:latest -f functions/${func}/Dockerfile.k8s .
-            docker save mirrorfm-${func}:latest | sudo k3s ctr images import -
-          done
-
-      - name: Register with ArgoCD
-        run: |
-          kubectl apply -f - <<EOF
-          apiVersion: argoproj.io/v1alpha1
-          kind: Application
-          metadata:
-            name: mirrorfm-core
-            namespace: argocd
-          spec:
-            project: default
-            source:
-              repoURL: https://github.com/mirrorfm/core.git
-              targetRevision: master
-              path: k8s
-            destination:
-              server: https://kubernetes.default.svc
-              namespace: mirrorfm
-            syncPolicy:
-              automated:
-                prune: true
-                selfHeal: true
-              syncOptions:
-                - CreateNamespace=true
-          EOF
-
-      - name: Restart deployments
-        run: |
-          for deploy in from-youtube from-discogs to-spotify; do
-            kubectl rollout restart deployment/${deploy} -n mirrorfm || true
-          done
-          echo "Deploy complete. CronJob manage-playlists will use new image on next run."
+          curl -s -X POST \
+            https://api.github.com/repos/stephanebruckert/homeplane/dispatches \
+            -H "Authorization: token ${{ secrets.HOMEPLANE_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d '{"event_type":"deploy","client_payload":{"repo":"mirrorfm/core","ref":"master"}}'
+          echo "Triggered homeplane deploy"
