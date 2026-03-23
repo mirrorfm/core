@@ -56,3 +56,13 @@ import {
   to = aws_lambda_function.fallback["manage-playlists"]
   id = "mirror-fm_manage-playlists"
 }
+
+# API Gateway Lambda permissions (added manually, now managed by TF)
+import {
+  to = aws_lambda_permission.api_gateway_to_www
+  id = "mirror-fm_to-www/AllowAPIGateway"
+}
+import {
+  to = aws_lambda_permission.api_gateway_from_github
+  id = "mirror-fm_from-github/AllowAPIGateway"
+}
