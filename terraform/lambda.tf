@@ -66,30 +66,12 @@ resource "aws_lambda_function" "cloud" {
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
 
-  environment {
-    variables = local.db_env
+  lifecycle {
+    ignore_changes = [environment]
   }
 }
 
 # --- Fallback Lambda functions ---
-
-data "aws_secretsmanager_secret_version" "function_secrets" {
-  for_each  = local.secret_names
-  secret_id = aws_secretsmanager_secret.function_secrets[each.key].id
-}
-
-locals {
-  # Merge DB creds (from SSM) with function-specific vars (from Secrets Manager)
-  # Filter out AWS_* and DB_* keys from Secrets Manager (DB comes from SSM)
-  fallback_env_vars = {
-    for name in local.secret_names : name => merge(
-      local.db_env,
-      { for k, v in jsondecode(data.aws_secretsmanager_secret_version.function_secrets[name].secret_string) :
-        k => v if !startswith(k, "AWS_") && !startswith(k, "DB_") && k != "SQS_QUEUE_URL" && k != "SQS_TO_SPOTIFY_URL"
-      }
-    )
-  }
-}
 
 resource "aws_lambda_function" "fallback" {
   for_each      = local.fallback_lambdas
@@ -101,8 +83,8 @@ resource "aws_lambda_function" "fallback" {
   memory_size   = each.value.memory_size
   timeout       = each.value.timeout
 
-  environment {
-    variables = local.fallback_env_vars[each.key]
+  lifecycle {
+    ignore_changes = [environment]
   }
 }
 
