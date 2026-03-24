@@ -255,6 +255,20 @@ func (client *App) RepairTerminatedThumbnails(accessToken string) {
 }
 
 func (client *App) RepairDiscogsLabelThumbnails(accessToken string) {
+	// First log how many labels need repair
+	var count int
+	err := client.SQLDriver.QueryRow(`
+		SELECT COUNT(*) FROM dg_labels l
+		JOIN dg_playlists p ON l.label_id = p.label_id
+		WHERE l.thumbnail_medium IS NULL
+		   OR l.thumbnail_medium = ''
+		   OR l.thumbnail_medium NOT LIKE '%spotify%'`).Scan(&count)
+	if err != nil {
+		fmt.Println("[DG] Count query error:", err)
+	} else {
+		fmt.Printf("[DG] Labels needing thumbnail repair: %d\n", count)
+	}
+
 	rows, err := client.SQLDriver.Query(`
 		SELECT l.label_id, MIN(p.spotify_playlist) FROM dg_labels l
 		JOIN dg_playlists p ON l.label_id = p.label_id
