@@ -31,5 +31,5 @@ This repository contains the background worker functions.
 
 - **k3s** (primary): `from-youtube`, `from-discogs`, `to-spotify`, `manage-playlists` — deployed via [deploy-k3s.yml](.github/workflows/deploy-k3s.yml)
 - **AWS Lambda** (cloud-only): `to-www`, `from-github` — deployed via [deploy-lambda.yml](.github/workflows/deploy-lambda.yml)
-- **AWS Lambda** (fallback): k3s functions are also deployed to Lambda as fallback, managed by [homeplane](https://github.com/mirrorfm/homeplane)
+- **AWS Lambda** (fallback): k3s functions are also deployed to Lambda as fallback
 - **Infrastructure**: Terraform in [`terraform/`](terraform/) — deployed via [terraform.yml](.github/workflows/terraform.yml)
