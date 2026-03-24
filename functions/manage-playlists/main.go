@@ -16,7 +16,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type App struct {
@@ -133,6 +135,7 @@ func Handler() error {
 
 	if oauthToken != "" {
 		app.RepairTerminatedThumbnails(oauthToken)
+		app.RepairDiscogsLabelThumbnails(oauthToken)
 		app.ArchiveTerminatedPlaylists(oauthToken)
 	}
 
@@ -251,6 +254,41 @@ func (client *App) RepairTerminatedThumbnails(accessToken string) {
 	}
 }
 
+func (client *App) RepairDiscogsLabelThumbnails(accessToken string) {
+	rows, err := client.SQLDriver.Query(`
+		SELECT l.label_id, p.spotify_playlist FROM dg_labels l
+		JOIN dg_playlists p ON l.label_id = p.label_id AND p.num = 1
+		WHERE l.thumbnail_medium IS NULL
+		   OR l.thumbnail_medium = ''
+		   OR l.thumbnail_medium NOT LIKE '%spotify%'
+		LIMIT 20`)
+	if err != nil {
+		fmt.Println("RepairDiscogsLabelThumbnails query error:", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var labelID, playlistID string
+		if err := rows.Scan(&labelID, &playlistID); err != nil {
+			continue
+		}
+		imageURL, err := getSpotifyPlaylistImage(accessToken, playlistID)
+		if err != nil || imageURL == "" {
+			fmt.Printf("[DG] No Spotify image for label %s: %v\n", labelID, err)
+			continue
+		}
+		_, err = client.SQLDriver.Exec(
+			"UPDATE dg_labels SET thumbnail_medium = ? WHERE label_id = ?",
+			imageURL, labelID)
+		if err != nil {
+			fmt.Printf("[DG] Failed to update thumbnail for label %s: %v\n", labelID, err)
+			continue
+		}
+		fmt.Printf("[DG] Repaired thumbnail for label %s\n", labelID)
+	}
+}
+
 func (client *App) ArchiveTerminatedPlaylists(accessToken string) {
 	rows, err := client.SQLDriver.Query(`
 		SELECT e.channel_name, p.spotify_playlist FROM yt_channels e
@@ -286,11 +324,34 @@ func (client *App) ArchiveTerminatedPlaylists(accessToken string) {
 	}
 }
 
+// spotifyDo executes an HTTP request with Spotify 429 rate-limit retry.
+func spotifyDo(req *http.Request) (*http.Response, error) {
+	for i := 0; i < 3; i++ {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != 429 {
+			return resp, nil
+		}
+		resp.Body.Close()
+		wait := 5
+		if s := resp.Header.Get("Retry-After"); s != "" {
+			if v, err := strconv.Atoi(s); err == nil {
+				wait = v
+			}
+		}
+		fmt.Printf("[Rate limited] waiting %ds\n", wait)
+		time.Sleep(time.Duration(wait) * time.Second)
+	}
+	return nil, fmt.Errorf("rate limited after 3 retries")
+}
+
 func getSpotifyPlaylistName(accessToken, playlistID string) (string, error) {
 	req, _ := http.NewRequest("GET",
 		"https://api.spotify.com/v1/playlists/"+playlistID+"?fields=name", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := spotifyDo(req)
 	if err != nil {
 		return "", err
 	}
@@ -312,7 +373,7 @@ func renameSpotifyPlaylist(accessToken, playlistID, newName string) error {
 		strings.NewReader(string(payload)))
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := spotifyDo(req)
 	if err != nil {
 		return err
 	}
@@ -328,7 +389,7 @@ func getSpotifyPlaylistImage(accessToken, playlistID string) (string, error) {
 	req, _ := http.NewRequest("GET",
 		"https://api.spotify.com/v1/playlists/"+playlistID+"?fields=images", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := spotifyDo(req)
 	if err != nil {
 		return "", err
 	}
