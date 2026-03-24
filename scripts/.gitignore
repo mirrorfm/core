@@ -1,0 +1,10 @@
+# Cleanup tools (one-time use, kept locally)
+cleanup_*.py
+reeval_results.py
+results/
+dry_run_*.txt
+.cache
+
+# Python
+.venv/
+__pycache__/

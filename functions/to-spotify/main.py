@@ -25,7 +25,6 @@ import boto3
 import pymysql
 import random
 import re
-from difflib import SequenceMatcher
 
 db_username = os.getenv('DB_USERNAME')
 db_password = os.getenv('DB_PASSWORD')
@@ -35,22 +34,7 @@ db_host = os.getenv('DB_HOST')
 deser = TypeDeserializer()
 
 
-TRACK_SIMILARITY_THRESHOLD = 0.8
-TRACK_SIMILARITY_EXCLUDES = [
-    "radio version",
-    "original mix",
-    "original version",
-    "instrumental",
-    "remix",
-    "extended version",
-    "extended mix",
-    "radio edit",
-    "remastered",
-    "remaster",
-    "short version",
-    "shorter edit",
-    "filtered version",
-]
+from similarity import TRACK_SIMILARITY_THRESHOLD, is_match
 
 
 # custom exceptions
@@ -421,10 +405,6 @@ def get_first_artist(record):
     return record["release_artistssort"]
 
 
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
-
 def spotify_lookup(handler, record, new_track_genres):
     if cats[handler.current_host]['track_parsing_needed']:
         raw_track_name = record[cats[handler.current_host]['track_name']]
@@ -451,26 +431,27 @@ def spotify_lookup(handler, record, new_track_genres):
     if spotify_track_info and not is_track_duplicate(handler,
                                                      record[cats[handler.current_host]['host_entity_id']],
                                                      spotify_track_info['uri']):
-        spotify_artist = re.sub(r'\s+archived$', '', spotify_track_info['artists'][0]['name'], flags=re.IGNORECASE)
-        found_track = " - ".join([spotify_artist, spotify_track_info['name']])
+        # Extract artist/track parts for similarity check
+        sp_artists = [a['name'] for a in spotify_track_info['artists']]
 
-        def sanitize(track):
-            # make track lowercase and remove frequent suffixes first (while spaces still present)
-            track = track.lower()
-            for sub in TRACK_SIMILARITY_EXCLUDES:
-                track = track.replace(sub, '')
-            # strip featured artist credits for comparison only
-            track = re.sub(r"\(?\b(feat\.?|ft\.?|featuring)\b[^)]*\)?", "", track)
-            # normalize & to space so "Harley & Muscle" matches "Harley&Muscle"
-            track = track.replace('&', ' ')
-            # then strip to alphanumeric and spaces, normalize whitespace
-            track = ''.join(ch for ch in track if ch.isalnum() or ch == ' ')
-            track = ' '.join(track.split())
-            return track
+        if cats[handler.current_host]['track_parsing_needed']:
+            # YouTube: use trackfilter-parsed parts
+            yt_artists_joined = track_name.split(" - ", 1)[0] if " - " in track_name else track_name
+            yt_track_part = track_name.split(" - ", 1)[1] if " - " in track_name else ""
+            first_yt_artist = (parsed[0][0] if isinstance(parsed[0], list) else parsed[0]) if parsed and len(parsed) > 1 else None
+        else:
+            # Discogs: structured data, no multi-artist fallback needed
+            yt_artists_joined = track_name.split(" - ", 1)[0] if " - " in track_name else track_name
+            yt_track_part = track_name.split(" - ", 1)[1] if " - " in track_name else ""
+            first_yt_artist = None
 
-        similarity = similar(sanitize(track_name), sanitize(found_track))
+        passes, similarity = is_match(
+            yt_artists_joined, yt_track_part,
+            sp_artists, spotify_track_info['name'],
+            first_yt_artist=first_yt_artist,
+        )
 
-        if similarity < TRACK_SIMILARITY_THRESHOLD:
+        if not passes:
             return
 
         print(

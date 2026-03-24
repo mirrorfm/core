@@ -1,10 +1,14 @@
-# Manages AWS infrastructure for k3s migration (secrets, EventBridge fallback rules).
+# Manages AWS infrastructure (Lambda, ECR, SQS, EventBridge, Secrets Manager, API Gateway).
 # - On PR: runs terraform plan and posts the diff as a comment.
-# - On push to main: runs terraform apply.
+# - On push to master: runs terraform apply.
+# - On workflow_dispatch: triggered by deploy-lambda.yml after ECR push.
+#
+# No secrets flow through this workflow — DB credentials are in SSM,
+# Lambda env vars are ignore_changes, secret values managed outside TF.
 #
 # Requires GitHub secrets:
-#   AWS_ACCESS_KEY_ID           — IAM user with permissions for SSM + Secrets Manager + EventBridge
-#   AWS_SECRET_ACCESS_KEY       — corresponding secret key
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
 
 name: Terraform
 
