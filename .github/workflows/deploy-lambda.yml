@@ -24,12 +24,14 @@ env:
 
 jobs:
   build-cloud:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     strategy:
       matrix:
         function: [to-www, from-github]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Check if function changed
         id: check
@@ -47,7 +49,7 @@ jobs:
 
       - name: Configure AWS credentials
         if: steps.check.outputs.changed == 'true'
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -66,27 +68,18 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           IMAGE=${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.function }}:latest
-          docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
-            -t ${{ matrix.function }} functions/${{ matrix.function }}
+          docker build -t ${{ matrix.function }} functions/${{ matrix.function }}
           docker tag ${{ matrix.function }}:latest $IMAGE
           docker push $IMAGE
           echo "Pushed ${{ matrix.function }}"
 
   build-fallback:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up QEMU for arm64 builds
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -105,8 +98,7 @@ jobs:
           for func in from-youtube from-discogs to-spotify manage-playlists; do
             echo "=== Building ${func} ==="
             IMAGE=${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${func}:latest
-            docker buildx build --platform linux/arm64 --provenance=false --output type=docker \
-              -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
+            docker build -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
             docker tag ${func}:latest ${IMAGE}
             docker push ${IMAGE}
             echo "Pushed ${func}"
@@ -116,7 +108,7 @@ jobs:
     needs: [build-cloud, build-fallback]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
       - name: Trigger Terraform apply
         run: gh workflow run terraform.yml
