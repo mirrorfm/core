@@ -256,11 +256,12 @@ func (client *App) RepairTerminatedThumbnails(accessToken string) {
 
 func (client *App) RepairDiscogsLabelThumbnails(accessToken string) {
 	rows, err := client.SQLDriver.Query(`
-		SELECT l.label_id, p.spotify_playlist FROM dg_labels l
-		JOIN dg_playlists p ON l.label_id = p.label_id AND p.num = 1
+		SELECT l.label_id, MIN(p.spotify_playlist) FROM dg_labels l
+		JOIN dg_playlists p ON l.label_id = p.label_id
 		WHERE l.thumbnail_medium IS NULL
 		   OR l.thumbnail_medium = ''
 		   OR l.thumbnail_medium NOT LIKE '%spotify%'
+		GROUP BY l.label_id
 		LIMIT 20`)
 	if err != nil {
 		fmt.Println("RepairDiscogsLabelThumbnails query error:", err)
