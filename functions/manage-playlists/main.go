@@ -262,7 +262,7 @@ func (client *App) RepairDiscogsLabelThumbnails(accessToken string) {
 		JOIN dg_playlists p ON l.label_id = p.label_id
 		WHERE l.thumbnail_medium IS NULL
 		   OR l.thumbnail_medium = ''
-		   OR l.thumbnail_medium NOT LIKE '%spotify%'`).Scan(&count)
+		   OR (l.thumbnail_medium NOT LIKE '%spotify%' AND l.thumbnail_medium NOT LIKE '%scdn.co%')`).Scan(&count)
 	if err != nil {
 		fmt.Println("[DG] Count query error:", err)
 	} else {
@@ -274,7 +274,7 @@ func (client *App) RepairDiscogsLabelThumbnails(accessToken string) {
 		JOIN dg_playlists p ON l.label_id = p.label_id
 		WHERE l.thumbnail_medium IS NULL
 		   OR l.thumbnail_medium = ''
-		   OR l.thumbnail_medium NOT LIKE '%spotify%'
+		   OR (l.thumbnail_medium NOT LIKE '%spotify%' AND l.thumbnail_medium NOT LIKE '%scdn.co%')
 		GROUP BY l.label_id
 		LIMIT 20`)
 	if err != nil {

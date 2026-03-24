@@ -46,8 +46,8 @@ func parsePaginationParams(c *gin.Context) PaginationParams {
 	if perPage < 1 {
 		perPage = 1
 	}
-	if perPage > 100 {
-		perPage = 100
+	if perPage > 150 {
+		perPage = 150
 	}
 	sortParam := c.DefaultQuery("sort", "followers")
 	order := strings.ToUpper(c.DefaultQuery("order", "DESC"))
