@@ -1,6 +1,6 @@
 output "secret_arns" {
-  description = "ARNs of the created secrets (populate values manually)"
-  value       = { for k, v in aws_secretsmanager_secret.function_secrets : k => v.arn }
+  description = "ARNs of the SSM parameters (populate values manually)"
+  value       = { for k, v in aws_ssm_parameter.function_secrets : k => v.arn }
 }
 
 output "eventbridge_rules" {
