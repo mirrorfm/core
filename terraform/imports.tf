@@ -21,6 +21,12 @@ moved {
   to   = aws_lambda_function.cloud["from-github"]
 }
 
+# to-www: split out of cloud for_each → standalone resource with SSM env vars
+moved {
+  from = aws_lambda_function.cloud["to-www"]
+  to   = aws_lambda_function.to_www
+}
+
 # Import ECR repos for fallback functions (created outside TF)
 import {
   to = aws_ecr_repository.lambda["from-youtube"]

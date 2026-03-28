@@ -4,7 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
+
+	"firebase.google.com/go/v4/auth"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/stripe/stripe-go/v82"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -13,8 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
-	"log"
-	"os"
 )
 
 type Client struct {
@@ -23,9 +26,13 @@ type Client struct {
 	DynamoDBTracksTable          string
 	DynamoDBDuplicateTracksTable string
 	DynamoDBInterestsTable       string
+	DynamoDBUsersTable           string
+	DynamoDBTakedownsTable       string
 	SQLDriver                    *sql.DB
 	SpotifyClientID              string
 	SpotifyClientSecret          string
+	FirebaseAuth                 *auth.Client
+	StripeWebhookSecret          string
 }
 
 const (
@@ -62,15 +69,32 @@ func init() {
 
 	sqlDriver, err := sql.Open("mysql", dbUser+":"+dbPass+"@tcp("+dbHost+")/"+dbName+"?parseTime=true")
 
+	// Firebase Auth
+	var firebaseAuth *auth.Client
+	if firebaseProjectID := os.Getenv("FIREBASE_PROJECT_ID"); firebaseProjectID != "" {
+		firebaseAuth = initFirebaseAuth(firebaseProjectID)
+	} else {
+		log.Println("FIREBASE_PROJECT_ID not set, auth endpoints disabled")
+	}
+
+	// Stripe
+	if stripeKey := os.Getenv("STRIPE_SECRET_KEY"); stripeKey != "" {
+		stripe.Key = stripeKey
+	}
+
 	client := Client{
 		DynamoDB:                     dynamoClient,
 		DynamoDBEventsTable:          "mirrorfm_events",
 		DynamoDBTracksTable:          "mirrorfm_yt_tracks",
 		DynamoDBDuplicateTracksTable: "mirrorfm_yt_duplicates",
 		DynamoDBInterestsTable:       "mirrorfm_interests",
+		DynamoDBUsersTable:           "mirrorfm_users",
+		DynamoDBTakedownsTable:       "mirrorfm_takedowns",
 		SQLDriver:                    sqlDriver,
 		SpotifyClientID:              os.Getenv("SPOTIFY_CLIENT_ID"),
 		SpotifyClientSecret:          os.Getenv("SPOTIFY_CLIENT_SECRET"),
+		FirebaseAuth:                 firebaseAuth,
+		StripeWebhookSecret:          os.Getenv("STRIPE_WEBHOOK_SECRET"),
 	}
 
 	if err != nil {
@@ -167,6 +191,58 @@ func init() {
 
 	r.POST("/submit/interest", func(c *gin.Context) {
 		client.handleInterest(c)
+	})
+
+	// Takedown requests (public, no auth required)
+	r.POST("/takedown", func(c *gin.Context) {
+		client.handleTakedown(c)
+	})
+
+	// Auth routes (only if Firebase is configured)
+	if client.FirebaseAuth != nil {
+		authGroup := r.Group("/auth")
+		authGroup.Use(client.authMiddleware())
+		authGroup.GET("/me", func(c *gin.Context) {
+			client.handleMe(c)
+		})
+
+		// Credits (auth required)
+		creditsGroup := r.Group("/credits")
+		creditsGroup.Use(client.authMiddleware())
+		creditsGroup.GET("", func(c *gin.Context) {
+			client.handleGetCredits(c)
+		})
+		creditsGroup.POST("/checkout", func(c *gin.Context) {
+			client.handleCheckout(c)
+		})
+
+		// Submissions (auth required)
+		subsGroup := r.Group("/submissions")
+		subsGroup.Use(client.authMiddleware())
+		subsGroup.POST("", func(c *gin.Context) {
+			client.handleCreateSubmissions(c)
+		})
+		subsGroup.GET("", func(c *gin.Context) {
+			client.handleListSubmissions(c)
+		})
+		subsGroup.PUT("/:id/respond", func(c *gin.Context) {
+			client.handleRespondSubmission(c)
+		})
+
+		// Curator inbox (auth required)
+		r.GET("/curator/submissions", client.authMiddleware(), func(c *gin.Context) {
+			client.handleCuratorSubmissions(c)
+		})
+	}
+
+	// Stripe webhook (public, verified by signature)
+	r.POST("/stripe/webhook", func(c *gin.Context) {
+		client.handleStripeWebhook(c)
+	})
+
+	// Submission expiry (called by cron/EventBridge)
+	r.POST("/submissions/expire", func(c *gin.Context) {
+		client.handleExpireSubmissions(c)
 	})
 
 	r.GET("/home", func(c *gin.Context) {

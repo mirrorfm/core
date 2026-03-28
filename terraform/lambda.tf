@@ -9,8 +9,8 @@ locals {
   aws_region     = "eu-west-1"
 
   # Cloud-only Lambda functions (always on AWS)
+  # to-www is managed separately (has SSM-driven env vars)
   cloud_lambdas = {
-    to-www      = { memory_size = 128, timeout = 35 }
     from-github = { memory_size = 128, timeout = 3 }
   }
 
@@ -22,7 +22,10 @@ locals {
     manage-playlists = { memory_size = 512, timeout = 300 }
   }
 
-  all_lambdas = merge(local.cloud_lambdas, local.fallback_lambdas)
+  # to-www is managed separately but still needs ECR repo + image digest
+  all_lambdas = merge(local.cloud_lambdas, local.fallback_lambdas, {
+    to-www = { memory_size = 128, timeout = 35 }
+  })
 }
 
 # --- ECR Repositories (all functions) ---
@@ -54,7 +57,39 @@ data "aws_ecr_image" "latest" {
   depends_on = [aws_ecr_repository.lambda]
 }
 
+# --- SSM data sources for to-www Lambda env vars ---
+
+data "aws_ssm_parameter" "to_www" {
+  for_each        = toset(["db/host", "db/username", "db/password", "db/name", "spotify/client-id", "spotify/client-secret", "firebase/project-id", "stripe/secret-key", "stripe/webhook-secret"])
+  name            = "/mirrorfm/${each.key}"
+  with_decryption = true
+}
+
 # --- Cloud Lambda functions ---
+
+resource "aws_lambda_function" "to_www" {
+  function_name = "mirror-fm_to-www"
+  role          = data.aws_iam_role.lambda_role.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.lambda["to-www"].repository_url}@${data.aws_ecr_image.latest["to-www"].image_digest}"
+  architectures = ["arm64"]
+  memory_size   = 128
+  timeout       = 35
+
+  environment {
+    variables = {
+      DB_HOST                = data.aws_ssm_parameter.to_www["db/host"].value
+      DB_USERNAME            = data.aws_ssm_parameter.to_www["db/username"].value
+      DB_PASSWORD            = data.aws_ssm_parameter.to_www["db/password"].value
+      DB_NAME                = data.aws_ssm_parameter.to_www["db/name"].value
+      SPOTIFY_CLIENT_ID      = data.aws_ssm_parameter.to_www["spotify/client-id"].value
+      SPOTIFY_CLIENT_SECRET  = data.aws_ssm_parameter.to_www["spotify/client-secret"].value
+      FIREBASE_PROJECT_ID    = data.aws_ssm_parameter.to_www["firebase/project-id"].value
+      STRIPE_SECRET_KEY      = data.aws_ssm_parameter.to_www["stripe/secret-key"].value
+      STRIPE_WEBHOOK_SECRET  = data.aws_ssm_parameter.to_www["stripe/webhook-secret"].value
+    }
+  }
+}
 
 resource "aws_lambda_function" "cloud" {
   for_each      = local.cloud_lambdas
@@ -93,7 +128,7 @@ resource "aws_lambda_function" "fallback" {
 resource "aws_lambda_permission" "api_gateway_to_www" {
   statement_id  = "AllowAPIGateway"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.cloud["to-www"].function_name
+  function_name = aws_lambda_function.to_www.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_api_gateway_rest_api.cloud_api["to-www"].execution_arn}/*/*/*"
 }
