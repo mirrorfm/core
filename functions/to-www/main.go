@@ -206,7 +206,10 @@ func init() {
 			client.handleMe(c)
 		})
 
-		// Pitch checkout (auth required)
+		// Pitch: free beta submit + paid checkout
+		r.POST("/pitch/submit", client.authMiddleware(), func(c *gin.Context) {
+			client.handlePitchFree(c)
+		})
 		r.POST("/pitch/checkout", client.authMiddleware(), func(c *gin.Context) {
 			client.handlePitchCheckout(c)
 		})

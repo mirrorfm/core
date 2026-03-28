@@ -16,6 +16,62 @@ import (
 
 const pitchPriceCents = 500 // $5.00
 
+// POST /pitch/submit — free beta: create submissions directly (no payment)
+func (client *Client) handlePitchFree(c *gin.Context) {
+	var req struct {
+		TrackURL    string `json:"track_url"`
+		TrackName   string `json:"track_name"`
+		TrackArtist string `json:"track_artist"`
+		TrackImage  string `json:"track_image"`
+		Channels    []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"channels"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil || req.TrackURL == "" || len(req.Channels) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "track_url and channels required"})
+		return
+	}
+
+	uid, _ := c.Get("firebase_uid")
+	userID := uid.(string)
+
+	paymentID := uuid.New().String()
+	channelsJSON, _ := json.Marshal(req.Channels)
+	now := time.Now().UTC()
+
+	// Create payment record (free, immediately completed)
+	_, err := client.SQLDriver.Exec(
+		`INSERT INTO payments (payment_id, user_id, track_url, track_name, track_artist, track_image, channels_json, amount_cents, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'completed', ?)`,
+		paymentID, userID, req.TrackURL, req.TrackName, req.TrackArtist, req.TrackImage, string(channelsJSON), now,
+	)
+	if err != nil {
+		log.Printf("Failed to create free payment record: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create submission"})
+		return
+	}
+
+	// Create submissions for each channel
+	count := 0
+	for _, ch := range req.Channels {
+		_, err := client.SQLDriver.Exec(
+			`INSERT INTO submissions (submission_id, payment_id, artist_user_id, channel_id, channel_name, track_url, track_name, track_artist, track_image, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+			uuid.New().String(), paymentID, userID, ch.ID, ch.Name, req.TrackURL, req.TrackName, req.TrackArtist, req.TrackImage, now,
+		)
+		if err != nil {
+			log.Printf("Failed to create submission for channel %s: %v", ch.ID, err)
+			continue
+		}
+		count++
+	}
+
+	log.Printf("Free pitch: %d submissions created for user %s (payment %s)", count, userID, paymentID)
+	c.JSON(http.StatusOK, gin.H{"submitted": count, "payment_id": paymentID})
+}
+
 // POST /pitch/checkout — create Stripe Checkout for a track submission
 func (client *Client) handlePitchCheckout(c *gin.Context) {
 	var req struct {
