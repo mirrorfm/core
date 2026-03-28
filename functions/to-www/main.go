@@ -206,22 +206,14 @@ func init() {
 			client.handleMe(c)
 		})
 
-		// Credits (auth required)
-		creditsGroup := r.Group("/credits")
-		creditsGroup.Use(client.authMiddleware())
-		creditsGroup.GET("", func(c *gin.Context) {
-			client.handleGetCredits(c)
-		})
-		creditsGroup.POST("/checkout", func(c *gin.Context) {
-			client.handleCheckout(c)
+		// Pitch checkout (auth required)
+		r.POST("/pitch/checkout", client.authMiddleware(), func(c *gin.Context) {
+			client.handlePitchCheckout(c)
 		})
 
 		// Submissions (auth required)
 		subsGroup := r.Group("/submissions")
 		subsGroup.Use(client.authMiddleware())
-		subsGroup.POST("", func(c *gin.Context) {
-			client.handleCreateSubmissions(c)
-		})
 		subsGroup.GET("", func(c *gin.Context) {
 			client.handleListSubmissions(c)
 		})
@@ -238,11 +230,6 @@ func init() {
 	// Stripe webhook (public, verified by signature)
 	r.POST("/stripe/webhook", func(c *gin.Context) {
 		client.handleStripeWebhook(c)
-	})
-
-	// Submission expiry (called by cron/EventBridge)
-	r.POST("/submissions/expire", func(c *gin.Context) {
-		client.handleExpireSubmissions(c)
 	})
 
 	r.GET("/home", func(c *gin.Context) {

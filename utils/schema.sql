@@ -93,9 +93,27 @@ create table yt_playlists
 create index yt_playlists_channel_id_num_index
     on yt_playlists (channel_id, num);
 
+create table payments
+(
+    payment_id        varchar(36)                                    not null primary key,
+    user_id           varchar(128)                                   not null,
+    stripe_session_id varchar(128)                                   null,
+    track_url         varchar(512)                                   not null,
+    track_name        varchar(255)                                   not null,
+    track_artist      varchar(255)                                   not null,
+    track_image       varchar(512)                                   not null default '',
+    channels_json     text                                           not null,
+    amount_cents      int                                            not null,
+    status            enum ('pending', 'completed', 'refunded')      not null default 'pending',
+    created_at        datetime                                       not null,
+    index idx_user (user_id, created_at desc),
+    index idx_stripe (stripe_session_id)
+);
+
 create table submissions
 (
     submission_id  varchar(36)                                            not null primary key,
+    payment_id     varchar(36)                                            not null,
     artist_user_id varchar(128)                                           not null,
     channel_id     varchar(64)                                            not null,
     channel_name   varchar(255)                                           not null,
@@ -103,21 +121,10 @@ create table submissions
     track_name     varchar(255)                                           not null,
     track_artist   varchar(255)                                           not null,
     track_image    varchar(512)                                           not null default '',
-    status         enum ('pending', 'accepted', 'rejected', 'expired')    not null default 'pending',
+    status         enum ('pending', 'accepted', 'rejected', 'archived')   not null default 'pending',
     created_at     datetime                                               not null,
     responded_at   datetime                                               null,
     index idx_artist (artist_user_id, created_at desc),
     index idx_channel_status (channel_id, status, created_at desc),
-    index idx_status_created (status, created_at)
-);
-
-create table credit_txns
-(
-    txn_id            varchar(36)  not null primary key,
-    user_id           varchar(128) not null,
-    type              varchar(32)  not null,
-    credits           int          not null,
-    stripe_session_id varchar(128) null,
-    created_at        datetime     not null,
-    index idx_user (user_id, created_at desc)
+    index idx_payment (payment_id)
 );
