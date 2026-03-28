@@ -147,7 +147,7 @@ func (client *Client) findMatchingChannels(genres []string) ([]ChannelMatch, err
 	query := fmt.Sprintf(`
 		SELECT
 			c.id, c.channel_id, c.channel_name, c.thumbnail_medium,
-			p.spotify_playlist, p.count_followers, p.found_tracks, p.count_tracks,
+			p.spotify_playlist, p.count_followers, p.found_tracks, c.count_tracks,
 			SUM(CASE WHEN g.genre_name IN (%s) THEN g.count ELSE 0 END) as matching_count,
 			SUM(g.count) as total_count,
 			GROUP_CONCAT(CASE WHEN g.genre_name IN (%s) THEN g.genre_name END SEPARATOR ',') as matching_genres_csv
