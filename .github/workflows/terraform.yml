@@ -1,10 +1,6 @@
-# Manages AWS infrastructure (Lambda, ECR, SQS, EventBridge, Secrets Manager, API Gateway).
+# Manages AWS infrastructure via Terraform.
 # - On PR: runs terraform plan and posts the diff as a comment.
-# - On push to master: runs terraform apply.
-# - On workflow_dispatch: triggered by deploy-lambda.yml after ECR push.
-#
-# No secrets flow through this workflow — DB credentials are in SSM,
-# Lambda env vars are ignore_changes, secret values managed outside TF.
+# - On push to master / workflow_dispatch: runs terraform apply.
 #
 # Requires GitHub secrets:
 #   AWS_ACCESS_KEY_ID

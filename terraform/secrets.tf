@@ -1,9 +1,6 @@
-# Secrets management.
-# DB credentials: SSM Parameter Store (/mirrorfm/db/*), rotated via scripts/rotate-db-password.py.
-# Function-specific secrets: SSM Parameter Store (/homeplane/*), synced to k8s via ESO.
-# Lambda env vars: managed outside Terraform (ignore_changes), never in plan output.
+# SSM Parameter Store
 
-# --- SSM Parameter Store (function-specific secrets, synced to k8s via ESO) ---
+# k8s function secrets (synced via ESO)
 
 locals {
   secret_names = toset(["from-youtube", "from-discogs", "to-spotify", "manage-playlists"])
@@ -17,7 +14,7 @@ resource "aws_ssm_parameter" "function_secrets" {
   lifecycle { ignore_changes = [value] }
 }
 
-# --- Spotify credentials (read by Lambda at runtime from SSM) ---
+# Spotify
 
 resource "aws_ssm_parameter" "spotify_client_id" {
   name  = "/mirrorfm/spotify/client-id"
@@ -33,7 +30,7 @@ resource "aws_ssm_parameter" "spotify_client_secret" {
   lifecycle { ignore_changes = [value] }
 }
 
-# --- Firebase config (read by Lambda at runtime + CI for frontend build) ---
+# Firebase
 
 resource "aws_ssm_parameter" "firebase_project_id" {
   name  = "/mirrorfm/firebase/project-id"
@@ -56,7 +53,7 @@ resource "aws_ssm_parameter" "firebase_auth_domain" {
   lifecycle { ignore_changes = [value] }
 }
 
-# --- Stripe config (read by CI workflows from SSM during deploy) ---
+# Stripe
 
 resource "aws_ssm_parameter" "stripe_secret_key" {
   name  = "/mirrorfm/stripe/secret-key"

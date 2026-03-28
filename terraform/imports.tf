@@ -27,6 +27,36 @@ moved {
   to   = aws_lambda_function.to_www
 }
 
+# Import SSM params created manually (before TF managed them)
+import {
+  to = aws_ssm_parameter.spotify_client_id
+  id = "/mirrorfm/spotify/client-id"
+}
+import {
+  to = aws_ssm_parameter.spotify_client_secret
+  id = "/mirrorfm/spotify/client-secret"
+}
+import {
+  to = aws_ssm_parameter.firebase_project_id
+  id = "/mirrorfm/firebase/project-id"
+}
+import {
+  to = aws_ssm_parameter.firebase_api_key
+  id = "/mirrorfm/firebase/api-key"
+}
+import {
+  to = aws_ssm_parameter.firebase_auth_domain
+  id = "/mirrorfm/firebase/auth-domain"
+}
+import {
+  to = aws_ssm_parameter.stripe_secret_key
+  id = "/mirrorfm/stripe/secret-key"
+}
+import {
+  to = aws_ssm_parameter.stripe_webhook_secret
+  id = "/mirrorfm/stripe/webhook-secret"
+}
+
 # Import ECR repos for fallback functions (created outside TF)
 import {
   to = aws_ecr_repository.lambda["from-youtube"]

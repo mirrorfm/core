@@ -77,8 +77,26 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check which fallback functions changed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "functions=from-youtube from-discogs to-spotify manage-playlists" >> "$GITHUB_OUTPUT"
+          else
+            CHANGED=""
+            for func in from-youtube from-discogs to-spotify manage-playlists; do
+              if git diff --name-only HEAD~1 HEAD -- "functions/${func}/" | grep -q .; then
+                CHANGED="${CHANGED} ${func}"
+              fi
+            done
+            echo "functions=${CHANGED}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Configure AWS credentials
+        if: steps.check.outputs.functions != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -86,16 +104,19 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Get AWS account ID
+        if: steps.check.outputs.functions != ''
         id: aws
         run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
       - name: Login to ECR
+        if: steps.check.outputs.functions != ''
         run: aws ecr get-login-password | docker login --username AWS --password-stdin ${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
-      - name: Build and push fallback images to ECR
+      - name: Build and push changed fallback images to ECR
+        if: steps.check.outputs.functions != ''
         run: |
           ACCOUNT_ID=${{ steps.aws.outputs.account_id }}
-          for func in from-youtube from-discogs to-spotify manage-playlists; do
+          for func in ${{ steps.check.outputs.functions }}; do
             echo "=== Building ${func} ==="
             IMAGE=${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${func}:latest
             docker build -t ${func} -f functions/${func}/Dockerfile.aws functions/${func}
