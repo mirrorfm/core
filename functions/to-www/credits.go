@@ -21,8 +21,6 @@ type CreditPackage struct {
 
 var creditPackages = map[string]CreditPackage{
 	"10": {Credits: 10, Price: 2000},
-	"25": {Credits: 25, Price: 4000},
-	"50": {Credits: 50, Price: 7000},
 }
 
 func (client *Client) handleGetCredits(c *gin.Context) {
