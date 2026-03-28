@@ -60,7 +60,7 @@ data "aws_ecr_image" "latest" {
 # --- SSM data sources for to-www Lambda env vars ---
 
 data "aws_ssm_parameter" "to_www" {
-  for_each        = toset(["db/host", "db/username", "db/password", "db/name", "spotify/client-id", "spotify/client-secret", "firebase/project-id", "stripe/secret-key", "stripe/webhook-secret"])
+  for_each        = toset(["db/host", "db/username", "db/password", "db/name", "spotify/client-id", "spotify/client-secret", "firebase/project-id", "stripe/secret-key"])
   name            = "/mirrorfm/${each.key}"
   with_decryption = true
 }
@@ -86,7 +86,6 @@ resource "aws_lambda_function" "to_www" {
       SPOTIFY_CLIENT_SECRET  = data.aws_ssm_parameter.to_www["spotify/client-secret"].value
       FIREBASE_PROJECT_ID    = data.aws_ssm_parameter.to_www["firebase/project-id"].value
       STRIPE_SECRET_KEY      = data.aws_ssm_parameter.to_www["stripe/secret-key"].value
-      STRIPE_WEBHOOK_SECRET  = data.aws_ssm_parameter.to_www["stripe/webhook-secret"].value
     }
   }
 }

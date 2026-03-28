@@ -32,7 +32,6 @@ type Client struct {
 	SpotifyClientID              string
 	SpotifyClientSecret          string
 	FirebaseAuth                 *auth.Client
-	StripeWebhookSecret          string
 }
 
 const (
@@ -94,7 +93,6 @@ func init() {
 		SpotifyClientID:              os.Getenv("SPOTIFY_CLIENT_ID"),
 		SpotifyClientSecret:          os.Getenv("SPOTIFY_CLIENT_SECRET"),
 		FirebaseAuth:                 firebaseAuth,
-		StripeWebhookSecret:          os.Getenv("STRIPE_WEBHOOK_SECRET"),
 	}
 
 	if err != nil {
@@ -206,12 +204,15 @@ func init() {
 			client.handleMe(c)
 		})
 
-		// Pitch: free beta submit + paid checkout
+		// Pitch: free beta submit + paid checkout + confirm
 		r.POST("/pitch/submit", client.authMiddleware(), func(c *gin.Context) {
 			client.handlePitchFree(c)
 		})
 		r.POST("/pitch/checkout", client.authMiddleware(), func(c *gin.Context) {
 			client.handlePitchCheckout(c)
+		})
+		r.POST("/pitch/confirm", client.authMiddleware(), func(c *gin.Context) {
+			client.handlePitchConfirm(c)
 		})
 
 		// Submissions (auth required)
@@ -229,11 +230,6 @@ func init() {
 			client.handleCuratorSubmissions(c)
 		})
 	}
-
-	// Stripe webhook (public, verified by signature)
-	r.POST("/stripe/webhook", func(c *gin.Context) {
-		client.handleStripeWebhook(c)
-	})
 
 	r.GET("/home", func(c *gin.Context) {
 		lastUpdated, err := client.getYoutubeChannels("last_found_time", "DESC", homeChannelsLimit, homeChannelsGenreLimit)
