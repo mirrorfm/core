@@ -644,13 +644,16 @@ def handle(event, c):
         entity_aid = entity['id']
         entity_name = entity[cats[handler.current_host]['entity_name']]
 
-        tracks_to_process = get_next_tracks(handler, entity_id)
-        for record in tracks_to_process['Items']:
-            if 'spotify_uri' not in record:
-                total_searched += 1
-                if spotify_lookup(handler, record, new_track_genres):
-                    total_added += 1
-        save_cursors(handler, tracks_to_process, entity_aid)
+        while True:
+            tracks_to_process = get_next_tracks(handler, entity_id)
+            for record in tracks_to_process['Items']:
+                if 'spotify_uri' not in record:
+                    total_searched += 1
+                    if spotify_lookup(handler, record, new_track_genres):
+                        total_added += 1
+            save_cursors(handler, tracks_to_process, entity_aid)
+            if 'LastEvaluatedKey' not in tracks_to_process:
+                break
 
     elif 'Records' in event and len(event['Records']) > 0:
         handler.current_host = detect_host(event)
