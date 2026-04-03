@@ -39,17 +39,21 @@ db_name = os.getenv('DB_NAME')
 host = os.getenv('DB_HOST')
 
 
-try:
-    conn = pymysql.connect(host=host,
-                           user=name,
-                           passwd=password,
-                           db=db_name,
-                           connect_timeout=5,
-                           cursorclass=pymysql.cursors.DictCursor)
-except pymysql.MySQLError as e:
-    print("ERROR: Unexpected error: Could not connect to MySQL instance.")
-    print(e)
-    sys.exit()
+conn = None
+
+
+def get_conn():
+    global conn
+    if conn is None:
+        conn = pymysql.connect(host=host,
+                               user=name,
+                               passwd=password,
+                               db=db_name,
+                               connect_timeout=5,
+                               cursorclass=pymysql.cursors.DictCursor)
+    else:
+        conn.ping(reconnect=True)
+    return conn
 
 scopes = ["https://www.googleapis.com/auth/youtube.readonly"]
 
@@ -123,13 +127,13 @@ def get_next_channel():
     else:
         last_channel_id = 1
 
-    cursor = conn.cursor()
+    cursor = get_conn().cursor()
     cursor.execute("SELECT * FROM yt_channels WHERE (id > %s or id = 1) order by id = 1, id limit 1" % str(last_channel_id))
     return cursor.fetchone()
 
 
 def get_channel(channel_id):
-    cursor = conn.cursor()
+    cursor = get_conn().cursor()
     cursor.execute("SELECT * FROM yt_channels WHERE channel_id='%s'" % str(channel_id))
     return cursor.fetchone()
 
@@ -187,7 +191,7 @@ def handle(event, context):
             if i == len(keys) - 1:
                 raise(Exception("Quota exceeded on all developer keys"))
 
-    cur = conn.cursor()
+    cur = get_conn().cursor()
     try:
         upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
         channel_name = response['items'][0]['snippet']['title']
@@ -198,7 +202,7 @@ def handle(event, context):
         if not channel['terminated_datetime']:
             cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
                         [channel_id])
-            conn.commit()
+            get_conn().commit()
             print("Set channel as terminated")
         else:
             print("Channel already terminated")
@@ -212,7 +216,7 @@ def handle(event, context):
 
     cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s, terminated_datetime = NULL WHERE channel_id = %s",
                 [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default, channel_id])
-    conn.commit()
+    get_conn().commit()
 
     if not last_upload_datetime or type(last_upload_datetime) == str:
         process_full_list = True
@@ -287,10 +291,10 @@ def handle(event, context):
 
     if next_last_upload_datetime and next_last_upload_datetime != last_upload_datetime:
         count_tracks = old_yt_count_tracks + len(new_items_desc)
-        cur = conn.cursor()
+        cur = get_conn().cursor()
         cur.execute('UPDATE yt_channels SET last_upload_datetime = %s, count_tracks = %s WHERE channel_id = %s',
                     [next_last_upload_datetime.strftime('%Y-%m-%d %H:%M:%S'), count_tracks, channel_id])
-        res = conn.commit()
+        res = get_conn().commit()
         print(res)
         # Notify to-spotify to process this channel's tracks
         if SQS_TO_SPOTIFY_URL and len(new_items_desc) > 0:
