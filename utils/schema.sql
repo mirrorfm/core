@@ -128,3 +128,11 @@ create table submissions
     index idx_channel_status (channel_id, status, created_at desc),
     index idx_payment (payment_id)
 );
+
+create table channel_claims
+(
+    channel_id varchar(64)  not null primary key,
+    user_id    varchar(128) not null,
+    claimed_at datetime     not null,
+    index idx_user (user_id)
+);

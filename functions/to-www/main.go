@@ -225,7 +225,13 @@ func init() {
 			client.handleRespondSubmission(c)
 		})
 
-		// Curator inbox (auth required)
+		// Curator (auth required)
+		r.POST("/curator/claim", client.authMiddleware(), func(c *gin.Context) {
+			client.handleCuratorClaim(c)
+		})
+		r.GET("/curator/channels", client.authMiddleware(), func(c *gin.Context) {
+			client.handleCuratorChannels(c)
+		})
 		r.GET("/curator/submissions", client.authMiddleware(), func(c *gin.Context) {
 			client.handleCuratorSubmissions(c)
 		})

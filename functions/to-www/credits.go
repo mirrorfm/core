@@ -25,6 +25,17 @@ func (client *Client) handlePitchFree(c *gin.Context) {
 	uid, _ := c.Get("firebase_uid")
 	userID := uid.(string)
 
+	// Duplicate check: prevent same user submitting same track twice
+	var existing int
+	client.SQLDriver.QueryRow(
+		`SELECT COUNT(*) FROM payments WHERE user_id = ? AND track_url = ? AND status IN ('completed', 'pending')`,
+		userID, req.TrackURL,
+	).Scan(&existing)
+	if existing > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "you already submitted this track"})
+		return
+	}
+
 	paymentID := uuid.New().String()
 	channelsJSON, _ := json.Marshal(req.Channels)
 	now := time.Now().UTC()
@@ -56,6 +67,17 @@ func (client *Client) handlePitchCheckout(c *gin.Context) {
 	uid, _ := c.Get("firebase_uid")
 	email, _ := c.Get("email")
 	userID := uid.(string)
+
+	// Duplicate check
+	var existing int
+	client.SQLDriver.QueryRow(
+		`SELECT COUNT(*) FROM payments WHERE user_id = ? AND track_url = ? AND status IN ('completed', 'pending')`,
+		userID, req.TrackURL,
+	).Scan(&existing)
+	if existing > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "you already submitted this track"})
+		return
+	}
 
 	paymentID := uuid.New().String()
 	channelsJSON, _ := json.Marshal(req.Channels)
