@@ -12,7 +12,7 @@ name: Deploy Lambda
 
 on:
   push:
-    branches: [master]
+    branches: [master, marketplace]
   workflow_dispatch:
 
 concurrency:

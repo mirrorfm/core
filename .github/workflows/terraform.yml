@@ -10,7 +10,7 @@ name: Terraform
 
 on:
   push:
-    branches: [master]
+    branches: [master, marketplace]
     paths:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
