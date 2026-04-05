@@ -240,6 +240,14 @@ def handle(event, context):
             print("Set channel as terminated")
         else:
             print("Channel already terminated")
+        # Advance cursor past terminated channels
+        if 'Records' not in event:
+            mirrorfm_cursors.put_item(
+                Item={
+                    'name': 'from_youtube_last_successful_channel',
+                    'value': channel['id']
+                }
+            )
         return {"searched": 1, "found": 0}
 
     print(channel_name)
