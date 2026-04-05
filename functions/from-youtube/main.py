@@ -201,64 +201,69 @@ def handle(event, context):
     print(upload_playlist_id)
     print(old_yt_count_tracks)
 
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
     keys = yt_developer_keys()
+    youtube = None
 
-    if len(keys) == 0:
-        raise(Exception("Missing YT_DEVELOPER_KEY env"))
+    # Use cached metadata from DB when available (saves API quota)
+    upload_playlist_id = channel.get('upload_playlist_id')
+    channel_name = channel.get('channel_name')
 
-    for i, key in enumerate(keys):
-        print(i, key)
-        youtube = discovery.build("youtube", "v3", developerKey=key)
+    if upload_playlist_id and channel_name and not channel.get('terminated_datetime'):
+        # Already have metadata, skip API call
+        print(channel_name)
+    else:
+        # New channel or missing metadata — fetch from YouTube API
+        if len(keys) == 0:
+            raise(Exception("Missing YT_DEVELOPER_KEY env"))
 
+        for i, key in enumerate(keys):
+            print(i, key)
+            youtube = discovery.build("youtube", "v3", developerKey=key)
+
+            try:
+                response = youtube.channels().list(
+                    part="contentDetails,snippet",
+                    id=channel_id
+                ).execute()
+                break
+            except Exception as e:
+                print(i, key, e)
+                if i == len(keys) - 1:
+                    raise(Exception("Quota exceeded on all developer keys"))
+
+        cur = get_conn().cursor()
         try:
-            response = youtube.channels().list(
-                part="contentDetails,snippet",
-                id=channel_id
-            ).execute()
-            break
-        except Exception as e:
-            print(i, key, e)
-            if i == len(keys) - 1:
-                raise(Exception("Quota exceeded on all developer keys"))
+            upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+            channel_name = response['items'][0]['snippet']['title']
+            thumbnails = response['items'][0]['snippet']['thumbnails']
+        except (KeyError, IndexError) as e:
+            if not channel['terminated_datetime']:
+                cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
+                            [channel_id])
+                get_conn().commit()
+                print("Set channel as terminated")
+            else:
+                print("Channel already terminated")
+            if 'Records' not in event:
+                mirrorfm_cursors.put_item(
+                    Item={
+                        'name': 'from_youtube_last_successful_channel',
+                        'value': channel['id']
+                    }
+                )
+            return {"searched": 1, "found": 0}
 
-    cur = get_conn().cursor()
-    try:
-        upload_playlist_id = response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
-        channel_name = response['items'][0]['snippet']['title']
-        thumbnails = response['items'][0]['snippet']['thumbnails']
-    except (KeyError, IndexError) as e:
-        # Ignore malformatted event / channel_id
-        # It's likely the channel has been removed or terminated
-        if not channel['terminated_datetime']:
-            cur.execute("UPDATE yt_channels SET terminated_datetime = NOW() WHERE channel_id = %s",
-                        [channel_id])
-            get_conn().commit()
-            print("Set channel as terminated")
-        else:
-            print("Channel already terminated")
-        # Advance cursor past terminated channels
-        if 'Records' not in event:
-            mirrorfm_cursors.put_item(
-                Item={
-                    'name': 'from_youtube_last_successful_channel',
-                    'value': channel['id']
-                }
-            )
-        return {"searched": 1, "found": 0}
+        print(channel_name)
 
-    print(channel_name)
+        thumbnail_high = thumbnails['high']['url']
+        thumbnail_medium = thumbnails['medium']['url']
+        thumbnail_default = thumbnails['default']['url']
 
-    thumbnail_high = thumbnails['high']['url']
-    thumbnail_medium = thumbnails['medium']['url']
-    thumbnail_default = thumbnails['default']['url']
-
-    cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s, terminated_datetime = NULL WHERE channel_id = %s",
-                [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default, channel_id])
-    get_conn().commit()
+        cur.execute("UPDATE yt_channels SET channel_name = %s, upload_playlist_id = %s, thumbnail_high = %s, thumbnail_medium = %s, thumbnail_default = %s, terminated_datetime = NULL WHERE channel_id = %s",
+                    [channel_name, upload_playlist_id, thumbnail_high, thumbnail_medium, thumbnail_default, channel_id])
+        get_conn().commit()
 
     if not last_upload_datetime or type(last_upload_datetime) == str:
         process_full_list = True
@@ -271,10 +276,18 @@ def handle(event, context):
     page_token = ""
     new_items_desc = []
 
+    def get_youtube_client():
+        nonlocal youtube
+        if youtube is None:
+            for i, key in enumerate(keys):
+                youtube = discovery.build("youtube", "v3", developerKey=key)
+                return youtube
+        return youtube
+
     if process_full_list:
         while True:
             try:
-                response = youtube.playlistItems().list(
+                response = get_youtube_client().playlistItems().list(
                     part="snippet,contentDetails",
                     playlistId=upload_playlist_id,
                     maxResults=50,
@@ -304,7 +317,7 @@ def handle(event, context):
             print(f"RSS returned {len(rss_items)} items (max), falling back to API")
             while True:
                 try:
-                    response = youtube.activities().list(
+                    response = get_youtube_client().activities().list(
                         part="snippet,contentDetails",
                         channelId=channel_id,
                         maxResults=50,
