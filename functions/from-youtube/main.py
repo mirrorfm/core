@@ -24,6 +24,8 @@ import logging
 logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 
 import json
+import urllib.request
+import xml.etree.ElementTree as ET
 
 # DB
 dynamodb = boto3.resource("dynamodb", region_name='eu-west-1')
@@ -112,6 +114,44 @@ def _flush(self):
     print("Batch write sent", len(items_to_send), "unprocessed:", len(self._items_buffer))
 
 
+def fetch_rss_uploads(channel_id):
+    """Fetch recent uploads via YouTube RSS feed (no API quota)."""
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            xml_data = response.read()
+    except Exception as e:
+        print(f"RSS fetch error for {channel_id}: {e}")
+        return None
+
+    root = ET.fromstring(xml_data)
+    ns = {
+        'atom': 'http://www.w3.org/2005/Atom',
+        'yt': 'http://www.youtube.com/xml/schemas/2015',
+    }
+
+    items = []
+    for entry in root.findall('atom:entry', ns):
+        video_id = entry.find('yt:videoId', ns)
+        title = entry.find('atom:title', ns)
+        published = entry.find('atom:published', ns)
+        if video_id is None or title is None or published is None:
+            continue
+        # Build an item structure compatible with the YouTube API format
+        items.append({
+            'snippet': {
+                'publishedAt': published.text,
+                'title': title.text,
+                'type': 'upload',
+            },
+            'contentDetails': {
+                'upload': {'videoId': video_id.text}
+            }
+        })
+    return items
+
+
 def get_next_channel():
     from_youtube_last_successful_channel = mirrorfm_cursors.get_item(
         Key={
@@ -150,12 +190,6 @@ def handle(event, context):
     else:
         # The lambda was triggered by CRON
         channel = get_next_channel()
-        mirrorfm_cursors.put_item(
-            Item={
-                'name': 'from_youtube_last_successful_channel',
-                'value': channel['id']
-            }
-        )
         channel_id = channel['channel_id']
         print(channel['channel_name'])
         if 'last_upload_datetime' in channel:
@@ -251,25 +285,38 @@ def handle(event, context):
         # https://stackoverflow.com/a/22898075/1515819
         new_items_desc.reverse()
     else:
-        while True:
-            try:
-                response = youtube.activities().list(
-                    part="snippet,contentDetails",
-                    channelId=channel_id,
-                    maxResults=50,
-                    pageToken=page_token,
-                    publishedAfter=datetime_to_zulu(last_upload_datetime)
-                ).execute()
-            except Exception as e:
-                print(e)
-                return {"searched": 1, "found": 0}
-            for item in response['items']:
+        # Use RSS feed for incremental updates (no API quota)
+        rss_items = fetch_rss_uploads(channel_id)
+        if rss_items is None:
+            print("RSS fetch failed, skipping channel")
+            return {"searched": 1, "found": 0}
+
+        if len(rss_items) >= 15:
+            # RSS maxes out at 15 — there may be more, fall back to API
+            print(f"RSS returned {len(rss_items)} items (max), falling back to API")
+            while True:
+                try:
+                    response = youtube.activities().list(
+                        part="snippet,contentDetails",
+                        channelId=channel_id,
+                        maxResults=50,
+                        pageToken=page_token,
+                        publishedAfter=datetime_to_zulu(last_upload_datetime)
+                    ).execute()
+                except Exception as e:
+                    print(f"API fallback failed: {e}")
+                    return {"searched": 1, "found": 0}
+                for item in response['items']:
+                    if item['snippet']['type'] == 'upload':
+                        next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
+                if 'nextPageToken' in response:
+                    page_token = response['nextPageToken']
+                else:
+                    break
+        else:
+            for item in rss_items:
                 if item['snippet']['type'] == 'upload':
                     next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
-            if 'nextPageToken' in response:
-                page_token = response['nextPageToken']
-            else:
-                break
 
     with mirrorfm_yt_tracks.batch_writer(overwrite_by_pkeys=["yt_channel_id", "yt_track_composite"]) as batch:
         batch._flush = types.MethodType(_flush, batch)
@@ -302,9 +349,26 @@ def handle(event, context):
                 QueueUrl=SQS_TO_SPOTIFY_URL,
                 MessageBody=json.dumps({"host": "yt", "entity_id": channel_id}))
             print("Notified to-spotify via SQS")
+
+        # Advance cursor only after successful processing
+        if 'Records' not in event:
+            mirrorfm_cursors.put_item(
+                Item={
+                    'name': 'from_youtube_last_successful_channel',
+                    'value': channel['id']
+                }
+            )
         return {"searched": 1, "found": len(new_items_desc)}
     else:
         print("No new tracks")
+        # Advance cursor only after successful processing
+        if 'Records' not in event:
+            mirrorfm_cursors.put_item(
+                Item={
+                    'name': 'from_youtube_last_successful_channel',
+                    'value': channel['id']
+                }
+            )
         return {"searched": 1, "found": 0}
 
 
