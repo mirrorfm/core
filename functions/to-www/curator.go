@@ -64,7 +64,11 @@ func (client *Client) handleCuratorClaim(c *gin.Context) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		log.Printf("YouTube API returned %d: %s", resp.StatusCode, string(body))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to fetch YouTube channels"})
+		if resp.StatusCode == 403 && strings.Contains(string(body), "quota") {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "YouTube API quota exceeded. Please try again tomorrow."})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to fetch YouTube channels"})
+		}
 		return
 	}
 
