@@ -191,9 +191,12 @@ func init() {
 		client.handleInterest(c)
 	})
 
-	// Takedown requests (public, no auth required)
+	// Takedown requests and track reports (public, no auth required)
 	r.POST("/takedown", func(c *gin.Context) {
 		client.handleTakedown(c)
+	})
+	r.POST("/report", func(c *gin.Context) {
+		client.handleReport(c)
 	})
 
 	// Auth routes (only if Firebase is configured)
