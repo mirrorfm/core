@@ -202,6 +202,9 @@ func init() {
 	r.GET("/genres", func(c *gin.Context) {
 		client.handleGenres(c)
 	})
+	r.GET("/genres/graph", func(c *gin.Context) {
+		client.handleGenresGraph(c)
+	})
 
 	// Auth routes (only if Firebase is configured)
 	if client.FirebaseAuth != nil {
