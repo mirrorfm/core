@@ -46,15 +46,17 @@ type GenreLink struct {
 }
 
 func (client *Client) handleGenresGraph(c *gin.Context) {
+	// Only include genres that appear on 10+ channels, with strong co-occurrence (20+ shared channels)
 	rows, err := client.SQLDriver.Query(`
 		SELECT a.genre_name, b.genre_name, COUNT(DISTINCT a.yt_channel_id) as shared
 		FROM yt_genres a
 		JOIN yt_genres b ON a.yt_channel_id = b.yt_channel_id AND a.genre_name < b.genre_name
-		WHERE a.count >= 3 AND b.count >= 3
+		WHERE a.genre_name IN (SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10)
+		AND b.genre_name IN (SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10)
 		GROUP BY a.genre_name, b.genre_name
-		HAVING shared >= 5
+		HAVING shared >= 20
 		ORDER BY shared DESC
-		LIMIT 500
+		LIMIT 200
 	`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch genre graph"})
