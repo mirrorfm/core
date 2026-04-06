@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"sort"
 
 	"github.com/gin-gonic/gin"
 )
@@ -46,93 +47,88 @@ type GenreLink struct {
 }
 
 func (client *Client) handleGenresGraph(c *gin.Context) {
-	// Step 1: Find genres on 10+ channels
-	eligibleRows, err := client.SQLDriver.Query(`
-		SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10
+	// Fetch all genre-channel pairs in one query, compute co-occurrence in memory
+	rows, err := client.SQLDriver.Query(`
+		SELECT yt_channel_id, genre_name, count FROM yt_genres WHERE count >= 3
 	`)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch eligible genres"})
-		return
-	}
-	defer eligibleRows.Close()
-
-	eligible := make(map[string]bool)
-	for eligibleRows.Next() {
-		var name string
-		eligibleRows.Scan(&name)
-		eligible[name] = true
-	}
-
-	if len(eligible) == 0 {
-		c.JSON(http.StatusOK, gin.H{"nodes": []GenreCount{}, "links": []GenreLink{}})
-		return
-	}
-
-	// Step 2: Get co-occurrences only for eligible genres
-	placeholders := ""
-	args := make([]interface{}, 0, len(eligible))
-	for name := range eligible {
-		if placeholders != "" {
-			placeholders += ","
-		}
-		placeholders += "?"
-		args = append(args, name)
-	}
-
-	rows, err := client.SQLDriver.Query(`
-		SELECT a.genre_name, b.genre_name, COUNT(DISTINCT a.yt_channel_id) as shared
-		FROM yt_genres a
-		JOIN yt_genres b ON a.yt_channel_id = b.yt_channel_id AND a.genre_name < b.genre_name
-		WHERE a.genre_name IN (`+placeholders+`) AND b.genre_name IN (`+placeholders+`)
-		GROUP BY a.genre_name, b.genre_name
-		HAVING shared >= 20
-		ORDER BY shared DESC
-		LIMIT 200
-	`, append(args, args...)...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch genre graph"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch genre data"})
 		return
 	}
 	defer rows.Close()
 
-	nodesSet := make(map[string]bool)
-	var links []GenreLink
+	// Build: channel → list of genres, and genre → total count
+	channelGenres := make(map[int][]string)
+	genreTotals := make(map[string]int)
+	genreChannelCount := make(map[string]int)
+
 	for rows.Next() {
-		var l GenreLink
-		if err := rows.Scan(&l.Source, &l.Target, &l.Weight); err != nil {
+		var channelID int
+		var genre string
+		var count int
+		if err := rows.Scan(&channelID, &genre, &count); err != nil {
 			continue
 		}
-		links = append(links, l)
-		nodesSet[l.Source] = true
-		nodesSet[l.Target] = true
+		channelGenres[channelID] = append(channelGenres[channelID], genre)
+		genreTotals[genre] += count
+		genreChannelCount[genre]++
+	}
+
+	// Filter: only genres on 10+ channels
+	eligible := make(map[string]bool)
+	for genre, chCount := range genreChannelCount {
+		if chCount >= 10 {
+			eligible[genre] = true
+		}
+	}
+
+	// Compute co-occurrence in memory
+	type pair struct{ a, b string }
+	cooccur := make(map[pair]int)
+	for _, genres := range channelGenres {
+		// Only eligible genres
+		var filtered []string
+		for _, g := range genres {
+			if eligible[g] {
+				filtered = append(filtered, g)
+			}
+		}
+		for i := 0; i < len(filtered); i++ {
+			for j := i + 1; j < len(filtered); j++ {
+				a, b := filtered[i], filtered[j]
+				if a > b {
+					a, b = b, a
+				}
+				cooccur[pair{a, b}]++
+			}
+		}
+	}
+
+	// Build links (threshold 20+ shared channels)
+	nodesSet := make(map[string]bool)
+	var links []GenreLink
+	for p, count := range cooccur {
+		if count >= 20 {
+			links = append(links, GenreLink{Source: p.a, Target: p.b, Weight: count})
+			nodesSet[p.a] = true
+			nodesSet[p.b] = true
+		}
+	}
+
+	// Sort by weight desc, limit 200
+	sort.Slice(links, func(i, j int) bool { return links[i].Weight > links[j].Weight })
+	if len(links) > 200 {
+		links = links[:200]
+		nodesSet = make(map[string]bool)
+		for _, l := range links {
+			nodesSet[l.Source] = true
+			nodesSet[l.Target] = true
+		}
 	}
 
 	var nodes []GenreCount
-	if len(nodesSet) > 0 {
-		// Get counts for all nodes
-		placeholders := ""
-		args := make([]interface{}, 0, len(nodesSet))
-		for name := range nodesSet {
-			if placeholders != "" {
-				placeholders += ","
-			}
-			placeholders += "?"
-			args = append(args, name)
-		}
-		nodeRows, err := client.SQLDriver.Query(
-			"SELECT genre_name, SUM(count) as total FROM yt_genres WHERE genre_name IN ("+placeholders+") GROUP BY genre_name",
-			args...,
-		)
-		if err == nil {
-			defer nodeRows.Close()
-			for nodeRows.Next() {
-				var g GenreCount
-				if err := nodeRows.Scan(&g.Name, &g.Count); err != nil {
-					continue
-				}
-				nodes = append(nodes, g)
-			}
-		}
+	for name := range nodesSet {
+		nodes = append(nodes, GenreCount{Name: name, Count: genreTotals[name]})
 	}
 
 	if links == nil {
