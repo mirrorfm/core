@@ -47,7 +47,7 @@ type GenreLink struct {
 }
 
 func (client *Client) handleGenresGraph(c *gin.Context) {
-	// Fetch genre-channel pairs for genres on 10+ channels only
+	// Fetch all genre-channel pairs for eligible genres
 	rows, err := client.SQLDriver.Query(`
 		SELECT g.yt_channel_id, g.genre_name, g.count
 		FROM yt_genres g
@@ -55,6 +55,7 @@ func (client *Client) handleGenresGraph(c *gin.Context) {
 			SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10
 		) e ON g.genre_name = e.genre_name
 		WHERE g.count >= 3
+		ORDER BY g.yt_channel_id, g.count DESC
 	`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch genre data"})
@@ -62,10 +63,13 @@ func (client *Client) handleGenresGraph(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	// Build: channel → list of genres, and genre → total count
-	channelGenres := make(map[int][]string)
+	// Build: channel → top 3 genres only
+	type genreEntry struct {
+		name  string
+		count int
+	}
+	channelAll := make(map[int][]genreEntry)
 	genreTotals := make(map[string]int)
-	genreChannelCount := make(map[string]int)
 
 	for rows.Next() {
 		var channelID int
@@ -74,9 +78,20 @@ func (client *Client) handleGenresGraph(c *gin.Context) {
 		if err := rows.Scan(&channelID, &genre, &count); err != nil {
 			continue
 		}
-		channelGenres[channelID] = append(channelGenres[channelID], genre)
+		channelAll[channelID] = append(channelAll[channelID], genreEntry{genre, count})
 		genreTotals[genre] += count
-		genreChannelCount[genre]++
+	}
+
+	// Keep only top 3 per channel
+	channelGenres := make(map[int][]string)
+	for chID, entries := range channelAll {
+		limit := 3
+		if len(entries) < limit {
+			limit = len(entries)
+		}
+		for _, e := range entries[:limit] {
+			channelGenres[chID] = append(channelGenres[chID], e.name)
+		}
 	}
 
 	// Compute co-occurrence in memory
