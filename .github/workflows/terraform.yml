@@ -57,6 +57,8 @@ jobs:
         id: plan
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -no-color -out=tfplan
+        env:
+          TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
         continue-on-error: true
 
       - name: Post plan to PR
@@ -109,3 +111,5 @@ jobs:
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
         run: terraform apply -auto-approve
+        env:
+          TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
