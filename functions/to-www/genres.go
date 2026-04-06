@@ -46,18 +46,49 @@ type GenreLink struct {
 }
 
 func (client *Client) handleGenresGraph(c *gin.Context) {
-	// Only include genres that appear on 10+ channels, with strong co-occurrence (20+ shared channels)
+	// Step 1: Find genres on 10+ channels
+	eligibleRows, err := client.SQLDriver.Query(`
+		SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch eligible genres"})
+		return
+	}
+	defer eligibleRows.Close()
+
+	eligible := make(map[string]bool)
+	for eligibleRows.Next() {
+		var name string
+		eligibleRows.Scan(&name)
+		eligible[name] = true
+	}
+
+	if len(eligible) == 0 {
+		c.JSON(http.StatusOK, gin.H{"nodes": []GenreCount{}, "links": []GenreLink{}})
+		return
+	}
+
+	// Step 2: Get co-occurrences only for eligible genres
+	placeholders := ""
+	args := make([]interface{}, 0, len(eligible))
+	for name := range eligible {
+		if placeholders != "" {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, name)
+	}
+
 	rows, err := client.SQLDriver.Query(`
 		SELECT a.genre_name, b.genre_name, COUNT(DISTINCT a.yt_channel_id) as shared
 		FROM yt_genres a
 		JOIN yt_genres b ON a.yt_channel_id = b.yt_channel_id AND a.genre_name < b.genre_name
-		WHERE a.genre_name IN (SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10)
-		AND b.genre_name IN (SELECT genre_name FROM yt_genres GROUP BY genre_name HAVING COUNT(DISTINCT yt_channel_id) >= 10)
+		WHERE a.genre_name IN (`+placeholders+`) AND b.genre_name IN (`+placeholders+`)
 		GROUP BY a.genre_name, b.genre_name
 		HAVING shared >= 20
 		ORDER BY shared DESC
 		LIMIT 200
-	`)
+	`, append(args, args...)...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch genre graph"})
 		return
