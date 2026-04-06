@@ -313,28 +313,10 @@ def handle(event, context):
             return {"searched": 1, "found": 0}
 
         if len(rss_items) >= 15:
-            # RSS maxes out at 15 — there may be more, fall back to API
-            print(f"RSS returned {len(rss_items)} items (max), falling back to API")
-            while True:
-                try:
-                    response = get_youtube_client().activities().list(
-                        part="snippet,contentDetails",
-                        channelId=channel_id,
-                        maxResults=50,
-                        pageToken=page_token,
-                        publishedAfter=datetime_to_zulu(last_upload_datetime)
-                    ).execute()
-                except Exception as e:
-                    print(f"API fallback failed: {e}")
-                    return {"searched": 1, "found": 0}
-                for item in response['items']:
-                    if item['snippet']['type'] == 'upload':
-                        next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
-                if 'nextPageToken' in response:
-                    page_token = response['nextPageToken']
-                else:
-                    break
-        else:
+            # RSS maxes out at 15 — use what we have, catch the rest next cycle
+            print(f"RSS returned {len(rss_items)} items (max), using RSS only")
+
+        if True:
             for item in rss_items:
                 if item['snippet']['type'] == 'upload':
                     next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
