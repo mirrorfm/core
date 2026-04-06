@@ -199,6 +199,10 @@ func init() {
 		client.handleReport(c)
 	})
 
+	r.GET("/genres", func(c *gin.Context) {
+		client.handleGenres(c)
+	})
+
 	// Auth routes (only if Firebase is configured)
 	if client.FirebaseAuth != nil {
 		authGroup := r.Group("/auth")
