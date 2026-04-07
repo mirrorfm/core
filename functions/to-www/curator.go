@@ -39,11 +39,18 @@ type CuratorChannel struct {
 // POST /curator/claim — verify YouTube channel ownership and link to user
 func (client *Client) handleCuratorClaim(c *gin.Context) {
 	var req struct {
-		YouTubeAccessToken string `json:"youtube_access_token"`
+		YouTubeAccessToken string   `json:"youtube_access_token"`
+		ChannelIDs         []string `json:"channel_ids"` // optional: claim only these channels
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.YouTubeAccessToken == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "youtube_access_token required"})
 		return
+	}
+
+	// Build lookup set for channel_ids filter
+	filterChannels := make(map[string]bool)
+	for _, id := range req.ChannelIDs {
+		filterChannels[id] = true
 	}
 
 	uid, _ := c.Get("firebase_uid")
@@ -106,7 +113,10 @@ func (client *Client) handleCuratorClaim(c *gin.Context) {
 		err := client.SQLDriver.QueryRow("SELECT COUNT(*) FROM yt_channels WHERE channel_id = ?", item.ID).Scan(&count)
 		if err == nil && count > 0 {
 			ch.Tracked = true
-			managedIDs = append(managedIDs, &dynamodb.AttributeValue{S: aws.String(item.ID)})
+			// Only claim if no filter set, or channel is in the filter
+			if len(filterChannels) == 0 || filterChannels[item.ID] {
+				managedIDs = append(managedIDs, &dynamodb.AttributeValue{S: aws.String(item.ID)})
+			}
 		}
 
 		claimed = append(claimed, ch)
