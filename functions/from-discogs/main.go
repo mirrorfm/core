@@ -205,7 +205,8 @@ func (client *App) populateUniqueMasterReleases(releases *discogs.LabelReleases,
 
 		release, err := client.GetRelease(id)
 		if err != nil {
-			return uniqueMasterReleases, skipped, err
+			log.Printf("Skipping release %d: %v", id, err)
+			continue
 		}
 
 		var masterID int
