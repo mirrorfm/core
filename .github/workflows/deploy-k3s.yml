@@ -19,9 +19,13 @@ jobs:
     steps:
       - name: Trigger homeplane deploy
         run: |
-          curl -s -X POST \
+          HTTP_CODE=$(curl -s -o /tmp/response.txt -w "%{http_code}" -X POST \
             https://api.github.com/repos/stephanebruckert/homeplane/dispatches \
             -H "Authorization: token ${{ secrets.HOMEPLANE_DISPATCH_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            -d '{"event_type":"deploy","client_payload":{"repo":"mirrorfm/core","ref":"master"}}'
+            -d '{"event_type":"deploy","client_payload":{"repo":"mirrorfm/core","ref":"${{ github.ref_name }}"}}')
+          if [ "$HTTP_CODE" != "204" ]; then
+            echo "::error::Homeplane dispatch failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
           echo "Triggered homeplane deploy"
