@@ -110,6 +110,13 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 		return errors.Wrap(err, "failed to get label info")
 	}
 
+	// Set up SQS client once for incremental notifications
+	sqsURL := os.Getenv("SQS_TO_SPOTIFY_URL")
+	var sqsClient *sqs.SQS
+	if sqsURL != "" {
+		sqsClient = sqs.New(session.Must(session.NewSession(&aws.Config{Region: aws.String("eu-west-1")})))
+	}
+
 	for {
 		releases, err := app.GetLabelReleases(localLabel.LastPage, labelId)
 		if err != nil {
@@ -141,21 +148,18 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 			return err
 		}
 
+		// Notify to-spotify after each page so it can start matching tracks incrementally
+		if len(uniqueMasterReleases) > 0 && sqsClient != nil {
+			body, _ := json.Marshal(map[string]interface{}{"host": "dg", "entity_id": labelId})
+			sqsClient.SendMessage(&sqs.SendMessageInput{
+				QueueUrl:    &sqsURL,
+				MessageBody: aws.String(string(body)),
+			})
+		}
+
 		if isLastPage {
 			break
 		}
-	}
-
-	// Notify to-spotify to process this label's tracks
-	if sqsURL := os.Getenv("SQS_TO_SPOTIFY_URL"); sqsURL != "" {
-		sess := session.Must(session.NewSession(&aws.Config{Region: aws.String("eu-west-1")}))
-		sqsClient := sqs.New(sess)
-		body, _ := json.Marshal(map[string]interface{}{"host": "dg", "entity_id": labelId})
-		sqsClient.SendMessage(&sqs.SendMessageInput{
-			QueueUrl:    &sqsURL,
-			MessageBody: aws.String(string(body)),
-		})
-		fmt.Println("Notified to-spotify via SQS")
 	}
 
 	if rowId > 0 {
