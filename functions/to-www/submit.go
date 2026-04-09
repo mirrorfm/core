@@ -13,7 +13,8 @@ import (
 )
 
 type AnalyzeRequest struct {
-	URL string `json:"url" binding:"required"`
+	URL    string   `json:"url" binding:"required"`
+	Genres []string `json:"genres"`
 }
 
 type TrackInfo struct {
@@ -92,7 +93,48 @@ func (client *Client) handleAnalyze(c *gin.Context) {
 		return
 	}
 
-	genres := collectArtistGenres(artists)
+	var genres []string
+	var allArtistGenres []string
+	genreSource := "artist"
+
+	if len(req.Genres) > 0 {
+		// Manual genres provided by the user (max 3)
+		genres = req.Genres
+		if len(genres) > 3 {
+			genres = genres[:3]
+		}
+		genreSource = "manual"
+	} else {
+		ranked := rankArtistGenres(artists)
+		allArtistGenres = ranked
+
+		// Use top 3 for matching
+		genres = ranked
+		if len(genres) > 3 {
+			genres = genres[:3]
+		}
+
+		// Fallback: try related artists if no genres found
+		if len(genres) == 0 {
+			for _, id := range artistIDs {
+				related, err := getRelatedArtists(token, id)
+				if err != nil {
+					fmt.Println("Related artists error:", err)
+					continue
+				}
+				ranked = rankArtistGenres(related)
+				allArtistGenres = ranked
+				genres = ranked
+				if len(genres) > 3 {
+					genres = genres[:3]
+				}
+				if len(genres) > 0 {
+					genreSource = "related"
+					break
+				}
+			}
+		}
+	}
 
 	// Build track info
 	var imageURL string
@@ -124,8 +166,10 @@ func (client *Client) handleAnalyze(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{
-		"track":   trackInfo,
-		"matches": matches,
+		"track":            trackInfo,
+		"matches":          matches,
+		"genre_source":     genreSource,
+		"all_artist_genres": allArtistGenres,
 	})
 }
 

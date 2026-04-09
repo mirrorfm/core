@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,33 @@ func getSpotifyArtists(token string, artistIDs []string) ([]spotifyArtistFull, e
 	return result.Artists, nil
 }
 
+func getRelatedArtists(token string, artistID string) ([]spotifyArtistFull, error) {
+	req, err := http.NewRequest("GET", "https://api.spotify.com/v1/artists/"+artistID+"/related-artists", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("spotify related artists API error: %s", string(body))
+	}
+
+	var result struct {
+		Artists []spotifyArtistFull `json:"artists"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Artists, nil
+}
+
 func collectArtistGenres(artists []spotifyArtistFull) []string {
 	seen := make(map[string]bool)
 	var genres []string
@@ -180,4 +208,60 @@ func collectArtistGenres(artists []spotifyArtistFull) []string {
 		}
 	}
 	return genres
+}
+
+// rankArtistGenres returns genres ordered by relevance:
+// - Genres shared by multiple artists score higher
+// - Primary artist (first) genres get a boost
+// - Within equal scores, earlier position in the artist's list wins
+func rankArtistGenres(artists []spotifyArtistFull) []string {
+	type genreScore struct {
+		name  string
+		score float64
+		order int // first-seen position for tie-breaking
+	}
+
+	scores := make(map[string]*genreScore)
+	idx := 0
+
+	for i, artist := range artists {
+		// Primary artist gets 2x weight
+		weight := 1.0
+		if i == 0 {
+			weight = 2.0
+		}
+
+		for j, genre := range artist.Genres {
+			if s, ok := scores[genre]; ok {
+				s.score += weight
+			} else {
+				// Earlier position in artist's genre list = slight boost
+				posBonus := 1.0 / float64(j+1) * 0.1
+				scores[genre] = &genreScore{
+					name:  genre,
+					score: weight + posBonus,
+					order: idx,
+				}
+				idx++
+			}
+		}
+	}
+
+	ranked := make([]*genreScore, 0, len(scores))
+	for _, s := range scores {
+		ranked = append(ranked, s)
+	}
+
+	sort.Slice(ranked, func(a, b int) bool {
+		if ranked[a].score != ranked[b].score {
+			return ranked[a].score > ranked[b].score
+		}
+		return ranked[a].order < ranked[b].order
+	})
+
+	result := make([]string, len(ranked))
+	for i, s := range ranked {
+		result[i] = s.name
+	}
+	return result
 }
