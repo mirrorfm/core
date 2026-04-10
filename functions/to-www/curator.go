@@ -108,10 +108,11 @@ func (client *Client) handleCuratorClaim(c *gin.Context) {
 			Thumbnail:   item.Snippet.Thumbnails.Default.URL,
 		}
 
-		// Check if this channel exists in our yt_channels table
+		// Check if this channel exists in our yt_channels table (or is allow-listed for demo)
+		allowListed := item.ID == "UCM5tBIU4jgal6vehtd4XzLQ"
 		var count int
 		err := client.SQLDriver.QueryRow("SELECT COUNT(*) FROM yt_channels WHERE channel_id = ?", item.ID).Scan(&count)
-		if err == nil && count > 0 {
+		if err == nil && (count > 0 || allowListed) {
 			ch.Tracked = true
 			// Only claim if no filter set, or channel is in the filter
 			if len(filterChannels) == 0 || filterChannels[item.ID] {
