@@ -351,6 +351,13 @@ def playlist_seems_full(e, handler, spotify_playlist):
 def add_track_to_spotify_playlist(handler, track_spotify_uri, entity_id):
     item, playlist_num = get_playlist(handler, entity_id)
     spotify_playlist = item['spotify_playlist']
+    # Write duplicate index BEFORE adding to playlist.
+    # If we crash after this but before the add, the track is skipped next time
+    # (missed is better than duplicated).
+    add_track_to_duplicate_index(handler,
+                                 entity_id,
+                                 track_spotify_uri,
+                                 spotify_playlist)
     try:
         handler.sp.user_playlist_add_tracks(SPOTIPY_USER,
                                             spotify_playlist,
@@ -364,10 +371,6 @@ def add_track_to_spotify_playlist(handler, track_spotify_uri, entity_id):
         else:
             # Reached API limit?
             raise e
-    add_track_to_duplicate_index(handler,
-                                 entity_id,
-                                 track_spotify_uri,
-                                 spotify_playlist)
     return spotify_playlist
 
 
