@@ -619,7 +619,9 @@ def handle(event, c):
                                        user=db_username,
                                        passwd=db_password,
                                        db=db_name,
-                                       connect_timeout=5,
+                                       connect_timeout=10,
+                                       read_timeout=300,
+                                       write_timeout=300,
                                        cursorclass=pymysql.cursors.DictCursor)
     except pymysql.MySQLError as e:
         print("ERROR: Unexpected error: Could not connect to MySQL instance.")
