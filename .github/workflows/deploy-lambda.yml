@@ -26,6 +26,7 @@ jobs:
   build-cloud:
     runs-on: ubuntu-24.04-arm
     strategy:
+      fail-fast: false
       matrix:
         function: [to-www, from-github]
     steps:
