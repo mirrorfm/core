@@ -110,7 +110,7 @@ func (client *Client) handleCuratorClaim(c *gin.Context) {
 
 		// Check if this channel exists in our yt_channels table (or is allow-listed for demo)
 		log.Printf("Curator claim: channel_id=%s name=%s", item.ID, item.Snippet.Title)
-		allowListed := item.ID == "UCM5tBIU4jgal6vehtd4XzLQ"
+		allowListed := item.ID == "UCrqgghsZVhGvddpsqxBc3XA"
 		var count int
 		err := client.SQLDriver.QueryRow("SELECT COUNT(*) FROM yt_channels WHERE channel_id = ?", item.ID).Scan(&count)
 		if err == nil && (count > 0 || allowListed) {
