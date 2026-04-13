@@ -1,5 +1,5 @@
 git+https://github.com/mirrorfm/trackfilter@v1.2.1
 spotipy==2.25.2
 pymysql==1.1.1
-Pillow==12.1.1
+Pillow==12.2.0
 boto3
