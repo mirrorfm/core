@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        function: [to-www, from-github]
+        function: [to-www]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +73,61 @@ jobs:
           docker tag ${{ matrix.function }}:latest $IMAGE
           docker push $IMAGE
           echo "Pushed ${{ matrix.function }}"
+
+  build-from-github:
+    # from-github is a Go zip Lambda (no Docker / ECR). The compiled bootstrap
+    # is uploaded to s3://mirrorfm-lambda-artifacts-<account>/from-github/lambda.zip;
+    # Terraform reads the latest object version and updates the Lambda.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if from-github changed
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- functions/from-github/ || echo "functions/from-github/")
+            if [ -n "$CHANGED" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.changed == 'true'
+        with:
+          go-version: '1.25'
+
+      - name: Build zip
+        if: steps.check.outputs.changed == 'true'
+        working-directory: functions/from-github
+        run: |
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap
+          zip -j lambda.zip bootstrap
+
+      - name: Configure AWS credentials
+        if: steps.check.outputs.changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS account ID
+        if: steps.check.outputs.changed == 'true'
+        id: aws
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload zip to S3
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          aws s3 cp functions/from-github/lambda.zip \
+            s3://mirrorfm-lambda-artifacts-${{ steps.aws.outputs.account_id }}/from-github/lambda.zip
 
   build-fallback:
     runs-on: ubuntu-24.04-arm
@@ -127,7 +182,7 @@ jobs:
           done
 
   apply-terraform:
-    needs: [build-cloud, build-fallback]
+    needs: [build-cloud, build-from-github, build-fallback]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,5 +1,5 @@
 # All Lambda functions and ECR repositories.
-# Cloud-only (to-www, from-github): always active.
+# Cloud-only (to-www): always active. (from-github moved to from_github_webhook.tf — zip-based.)
 # Fallback (from-youtube, from-discogs, to-spotify, manage-playlists): for k3s failover.
 
 data "aws_caller_identity" "current" {}
@@ -8,11 +8,9 @@ locals {
   aws_account_id = data.aws_caller_identity.current.account_id
   aws_region     = "eu-west-1"
 
-  # Cloud-only Lambda functions (always on AWS)
-  # to-www is managed separately (has SSM-driven env vars)
-  cloud_lambdas = {
-    from-github = { memory_size = 128, timeout = 3 }
-  }
+  # Container-image (ECR) Lambda functions. from-github is excluded — it has its
+  # own zip-based resource in from_github_webhook.tf.
+  cloud_lambdas = {}
 
   # Fallback Lambda functions (k3s primary, Lambda failover)
   fallback_lambdas = {
@@ -22,9 +20,14 @@ locals {
     manage-playlists = { memory_size = 512, timeout = 300 }
   }
 
-  # to-www is managed separately but still needs ECR repo + image digest
+  # to-www is managed separately but still needs ECR repo + image digest.
+  # from-github appears here for ECR-repo continuity only — its actual Lambda
+  # is zip-based and lives in from_github_webhook.tf, but the ECR repo + image
+  # data source stay in TF state to avoid orphaning. Not consumed by any
+  # Lambda function resource.
   all_lambdas = merge(local.cloud_lambdas, local.fallback_lambdas, {
-    to-www = { memory_size = 128, timeout = 35 }
+    to-www      = { memory_size = 128, timeout = 35 }
+    from-github = { memory_size = 256, timeout = 10 }
   })
 }
 
@@ -132,15 +135,24 @@ resource "aws_lambda_permission" "api_gateway_to_www" {
   source_arn    = "${aws_api_gateway_rest_api.cloud_api["to-www"].execution_arn}/*/*/*"
 }
 
+# Kept temporarily for the migration window. The Lambda function name is the
+# same after the package_type Image→Zip switch, so the existing API GW can
+# still invoke it until the webhook URL is moved over. Remove together with
+# the from-github entry in cloud_api above once the new URL is verified.
 resource "aws_lambda_permission" "api_gateway_from_github" {
   statement_id  = "AllowAPIGateway"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.cloud["from-github"].function_name
+  function_name = aws_lambda_function.from_github.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_api_gateway_rest_api.cloud_api["from-github"].execution_arn}/*/*/*"
 }
 
 # --- API Gateway REST APIs ---
+# from-github's API GW remains here in TF for the migration window. The Lambda
+# Function URL replaces it (see from_github_webhook.tf). Once the GitHub
+# webhook has been switched to the new URL and verified, remove "from-github"
+# from this for_each (and the lambda permission below) in a follow-up commit
+# to delete the old API GW.
 
 resource "aws_api_gateway_rest_api" "cloud_api" {
   for_each = {

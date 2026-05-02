@@ -101,6 +101,7 @@ resource "aws_iam_role_policy" "lambda_sqs" {
         Resource = concat(
           [for q in aws_sqs_queue.function_queue : q.arn],
           [for q in aws_sqs_queue.function_dlq : q.arn],
+          [aws_sqs_queue.github_webhook.arn, aws_sqs_queue.github_webhook_dlq.arn],
         )
       }
     ]

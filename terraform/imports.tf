@@ -21,6 +21,15 @@ moved {
   to   = aws_lambda_function.cloud["from-github"]
 }
 
+# from-github migrated from container-image (cloud for_each) to a standalone
+# zip-based resource managed in from_github_webhook.tf. The function name is
+# unchanged (mirror-fm_from-github), but package_type changes from Image to Zip,
+# which forces a destroy+recreate at the AWS layer.
+moved {
+  from = aws_lambda_function.cloud["from-github"]
+  to   = aws_lambda_function.from_github
+}
+
 # to-www: split out of cloud for_each → standalone resource with SSM env vars
 moved {
   from = aws_lambda_function.cloud["to-www"]
