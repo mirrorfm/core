@@ -140,6 +140,17 @@ resource "aws_lambda_function_url" "from_github" {
   authorization_type = "NONE" # signature verified in handler via webhook secret
 }
 
+# Required when authorization_type is NONE: aws_lambda_function_url does not
+# auto-create the resource-based policy. Without this, callers (GitHub) get
+# 403 Forbidden / AccessDeniedException at the URL.
+resource "aws_lambda_permission" "from_github_url" {
+  statement_id           = "AllowPublicFunctionURL"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.from_github.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
 # --- SQS → Lambda event source mapping (consumer mode) ---
 
 resource "aws_lambda_event_source_mapping" "github_webhook" {
