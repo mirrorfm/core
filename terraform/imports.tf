@@ -107,7 +107,6 @@ import {
   to = aws_lambda_permission.api_gateway_to_www
   id = "mirror-fm_to-www/AllowAPIGateway"
 }
-import {
-  to = aws_lambda_permission.api_gateway_from_github
-  id = "mirror-fm_from-github/AllowAPIGateway"
-}
+# from-github's API GW resources (REST API id 6fsxxp0ong + lambda permission)
+# are no longer in config; terraform apply destroys them. DeleteRestApi
+# cascades to the legacy methods/integrations created manually in 2019.

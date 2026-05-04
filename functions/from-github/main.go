@@ -3,11 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,23 +19,22 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/sns"
-	"github.com/aws/aws-sdk-go/service/sqs"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/go-github/v33/github"
 	"github.com/pkg/errors"
 )
 
-// The function has two roles, dispatched by event shape:
+// SQS consumer for the from-github queue.
 //
-//  1. Webhook ingest (Lambda Function URL trigger): verifies the GitHub
-//     X-Hub-Signature-256 HMAC, enqueues the raw body to SQS, returns 200.
-//     Kept dead-simple so cold-start failure surface is minimal.
+// The request path is API Gateway HTTP API → SQS direct integration, so this
+// Lambda is only ever triggered by SQS records. Each record's body is the raw
+// GitHub PushEvent JSON forwarded by API GW. Failures bubble up to the Lambda
+// runtime; SQS retries up to maxReceiveCount (5) before parking the message
+// in the DLQ. GitHub never sees a 5xx — API Gateway acks each delivery the
+// moment SQS accepts the message.
 //
-//  2. Consumer (SQS event source mapping): parses the enqueued PushEvent and
-//     runs the existing CSV ingest logic (Dynamo cursor → MySQL insert →
-//     SNS publish). Failures are retried by SQS up to maxReceiveCount, then
-//     land in the DLQ — so transient DDB/MySQL/GitHub-raw blips no longer
-//     drop CSV rows.
+// A direct-invocation fallback (PushEvent JSON) is kept for local runs and
+// `aws lambda invoke` testing.
 
 type App struct {
 	DynamoDB     *dynamodb.DynamoDB
@@ -80,29 +75,28 @@ var categories = map[string]Category{
 	},
 }
 
-// --- Dispatcher ---
-
-func dispatch(ctx context.Context, raw json.RawMessage) (any, error) {
+func dispatch(ctx context.Context, raw json.RawMessage) error {
 	if isSQSEvent(raw) {
 		var evt events.SQSEvent
 		if err := json.Unmarshal(raw, &evt); err != nil {
-			return nil, errors.Wrap(err, "decode SQSEvent")
+			return errors.Wrap(err, "decode SQSEvent")
 		}
-		return nil, consumerHandler(ctx, evt)
-	}
-	if isLambdaURLRequest(raw) {
-		var req events.LambdaFunctionURLRequest
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return nil, errors.Wrap(err, "decode LambdaFunctionURLRequest")
+		for _, record := range evt.Records {
+			var push github.PushEvent
+			if err := json.Unmarshal([]byte(record.Body), &push); err != nil {
+				return errors.Wrap(err, "decode PushEvent from SQS body")
+			}
+			if err := ProcessPushEvent(ctx, push); err != nil {
+				return err
+			}
 		}
-		return webhookHandler(ctx, req), nil
+		return nil
 	}
-	// Direct invocation (local runs, test events)
 	var push github.PushEvent
 	if err := json.Unmarshal(raw, &push); err != nil {
-		return nil, errors.Wrap(err, "unrecognized event shape")
+		return errors.Wrap(err, "unrecognized event shape")
 	}
-	return nil, ProcessPushEvent(ctx, push)
+	return ProcessPushEvent(ctx, push)
 }
 
 func isSQSEvent(raw json.RawMessage) bool {
@@ -116,116 +110,6 @@ func isSQSEvent(raw json.RawMessage) bool {
 	}
 	return len(probe.Records) > 0 && probe.Records[0].EventSource == "aws:sqs"
 }
-
-func isLambdaURLRequest(raw json.RawMessage) bool {
-	var probe struct {
-		Version        string `json:"version"`
-		RequestContext struct {
-			HTTP struct {
-				Method string `json:"method"`
-			} `json:"http"`
-		} `json:"requestContext"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return false
-	}
-	return probe.Version == "2.0" && probe.RequestContext.HTTP.Method != ""
-}
-
-// --- Webhook handler (Lambda Function URL) ---
-
-func webhookHandler(ctx context.Context, req events.LambdaFunctionURLRequest) events.LambdaFunctionURLResponse {
-	body := req.Body
-	if req.IsBase64Encoded {
-		decoded, err := base64.StdEncoding.DecodeString(body)
-		if err != nil {
-			fmt.Printf("base64 decode failed: %s\n", err)
-			return textResponse(400, "bad body")
-		}
-		body = string(decoded)
-	}
-
-	secret := os.Getenv("GITHUB_WEBHOOK_SECRET")
-	if secret == "" || secret == "REPLACE_ME_AFTER_APPLY" {
-		fmt.Println("GITHUB_WEBHOOK_SECRET not configured")
-		return textResponse(500, "server not configured")
-	}
-
-	signature := headerLookup(req.Headers, "x-hub-signature-256")
-	if !verifyHMAC([]byte(body), signature, secret) {
-		fmt.Println("HMAC mismatch — rejecting request")
-		return textResponse(401, "invalid signature")
-	}
-
-	queueURL := os.Getenv("WEBHOOK_QUEUE_URL")
-	if queueURL == "" {
-		fmt.Println("WEBHOOK_QUEUE_URL not set")
-		return textResponse(500, "server not configured")
-	}
-
-	sess := session.Must(session.NewSession(&aws.Config{Region: aws.String(region)}))
-	if _, err := sqs.New(sess).SendMessageWithContext(ctx, &sqs.SendMessageInput{
-		QueueUrl:    aws.String(queueURL),
-		MessageBody: aws.String(body),
-	}); err != nil {
-		fmt.Printf("SQS SendMessage failed: %s\n", err)
-		return textResponse(500, "enqueue failed")
-	}
-
-	return textResponse(200, "ok")
-}
-
-func verifyHMAC(body []byte, signatureHeader, secret string) bool {
-	const prefix = "sha256="
-	if !strings.HasPrefix(signatureHeader, prefix) {
-		return false
-	}
-	expected, err := hex.DecodeString(strings.TrimPrefix(signatureHeader, prefix))
-	if err != nil {
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	return hmac.Equal(expected, mac.Sum(nil))
-}
-
-func headerLookup(h map[string]string, key string) string {
-	// Lambda Function URL lowercases header names, but be defensive.
-	if v, ok := h[key]; ok {
-		return v
-	}
-	for k, v := range h {
-		if strings.EqualFold(k, key) {
-			return v
-		}
-	}
-	return ""
-}
-
-func textResponse(status int, body string) events.LambdaFunctionURLResponse {
-	return events.LambdaFunctionURLResponse{
-		StatusCode: status,
-		Headers:    map[string]string{"Content-Type": "text/plain"},
-		Body:       body,
-	}
-}
-
-// --- Consumer handler (SQS) ---
-
-func consumerHandler(ctx context.Context, evt events.SQSEvent) error {
-	for _, record := range evt.Records {
-		var push github.PushEvent
-		if err := json.Unmarshal([]byte(record.Body), &push); err != nil {
-			return errors.Wrap(err, "decode PushEvent from SQS body")
-		}
-		if err := ProcessPushEvent(ctx, push); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// --- Existing CSV ingest logic (unchanged behavior, just renamed) ---
 
 func ProcessPushEvent(ctx context.Context, evt github.PushEvent) error {
 	fmt.Printf("%+v\n", evt)
@@ -411,7 +295,6 @@ func main() {
 		lambda.Start(dispatch)
 		return
 	}
-	// Local run: simulate a direct PushEvent invoke for both files.
 	name := "mirrorfm/data"
 	if err := ProcessPushEvent(context.TODO(), github.PushEvent{
 		Repo: &github.PushEventRepository{FullName: &name},

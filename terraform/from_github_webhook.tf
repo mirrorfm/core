@@ -1,14 +1,16 @@
 # GitHub webhook ingestion (data repo CSV submissions).
 #
-# GitHub webhook → Lambda Function URL → enqueue → SQS → Lambda (consumer mode).
+# GitHub webhook → API Gateway HTTP API → SQS (direct integration) → Lambda consumer.
 #
-# Replaces the previous direct API Gateway → Lambda path. The synchronous
-# webhook → cold-start container Lambda was occasionally returning 500 when
-# the Lambda runtime failed to provision (no log stream, fast 500), and
-# GitHub does not retry 5xx — so individual CSV rows could be silently dropped.
-# Putting SQS in front gives at-least-once delivery with retry + DLQ. The
-# Lambda is also switched from container image to a Go zip package for
-# faster, more reliable cold starts.
+# No Lambda in the request path: API Gateway translates each POST into an
+# SQS SendMessage and returns 200 to GitHub immediately. The from-github
+# Lambda consumes from SQS — failures are retried by SQS (5x → DLQ), so
+# Lambda cold-start transients no longer drop CSV rows. GitHub does not
+# retry 5xx, so retry MUST happen behind a fast-acknowledging endpoint.
+#
+# Replaces: legacy REST API + container Lambda (cold-start failures), and
+# the brief Lambda Function URL detour (account-level public-access block
+# returns 403 for all *.lambda-url.* endpoints; works in Console only).
 
 # --- S3 bucket for Lambda zip artifacts ---
 
@@ -80,10 +82,30 @@ resource "aws_sqs_queue" "github_webhook" {
   })
 }
 
-# --- Webhook secret (HMAC SHA-256 verification) ---
-# Standard-tier SSM Parameter Store (String, free). Set the real value after
-# first apply, then paste the same value into the GitHub webhook config.
-# Lifecycle ignore_changes so TF doesn't overwrite it on subsequent applies.
+# Allow API Gateway service to send to this queue.
+resource "aws_sqs_queue_policy" "github_webhook_apigw" {
+  queue_url = aws_sqs_queue.github_webhook.url
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "apigateway.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.github_webhook.arn
+      Condition = {
+        ArnEquals = {
+          "aws:SourceArn" = aws_apigatewayv2_api.github_webhook.execution_arn
+        }
+      }
+    }]
+  })
+}
+
+# --- Webhook secret (kept for future HMAC verification via Lambda authorizer) ---
+# HTTP API → SQS direct integration cannot forward the X-Hub-Signature-256
+# header into the SQS message, so HMAC verification at ingress is not done
+# today. This secret is kept (pre-populated by the operator) so we can later
+# attach a Lambda authorizer to the API GW route without re-rolling secrets.
 resource "aws_ssm_parameter" "github_webhook_secret" {
   name  = "/mirrorfm/github/webhook-secret"
   type  = "String"
@@ -94,11 +116,7 @@ resource "aws_ssm_parameter" "github_webhook_secret" {
   }
 }
 
-data "aws_ssm_parameter" "github_webhook_secret" {
-  name = aws_ssm_parameter.github_webhook_secret.name
-}
-
-# --- DB credentials (reused by the consumer mode insert) ---
+# --- DB credentials (consumer Lambda reads them to insert into yt_channels) ---
 
 data "aws_ssm_parameter" "from_github_db" {
   for_each        = toset(["db/host", "db/username", "db/password", "db/name"])
@@ -106,7 +124,7 @@ data "aws_ssm_parameter" "from_github_db" {
   with_decryption = true
 }
 
-# --- Lambda function (zip, replaces container image variant) ---
+# --- Lambda function (zip, consumer-only — no longer in request path) ---
 
 resource "aws_lambda_function" "from_github" {
   function_name = "mirror-fm_from-github"
@@ -123,35 +141,99 @@ resource "aws_lambda_function" "from_github" {
 
   environment {
     variables = {
-      DB_HOST               = data.aws_ssm_parameter.from_github_db["db/host"].value
-      DB_USERNAME           = data.aws_ssm_parameter.from_github_db["db/username"].value
-      DB_PASSWORD           = data.aws_ssm_parameter.from_github_db["db/password"].value
-      DB_NAME               = data.aws_ssm_parameter.from_github_db["db/name"].value
-      GITHUB_WEBHOOK_SECRET = data.aws_ssm_parameter.github_webhook_secret.value
-      WEBHOOK_QUEUE_URL     = aws_sqs_queue.github_webhook.url
+      DB_HOST     = data.aws_ssm_parameter.from_github_db["db/host"].value
+      DB_USERNAME = data.aws_ssm_parameter.from_github_db["db/username"].value
+      DB_PASSWORD = data.aws_ssm_parameter.from_github_db["db/password"].value
+      DB_NAME     = data.aws_ssm_parameter.from_github_db["db/name"].value
     }
   }
 }
 
-# --- Lambda Function URL (replaces API Gateway) ---
+# --- API Gateway HTTP API → SQS direct integration (no Lambda in request path) ---
 
-resource "aws_lambda_function_url" "from_github" {
-  function_name      = aws_lambda_function.from_github.function_name
-  authorization_type = "NONE" # signature verified in handler via webhook secret
+resource "aws_apigatewayv2_api" "github_webhook" {
+  name          = "mirrorfm-github-webhook"
+  protocol_type = "HTTP"
+  description   = "GitHub webhook → SQS direct ingest. POST / forwarded to mirrorfm-from-github queue."
 }
 
-# Required when authorization_type is NONE: aws_lambda_function_url does not
-# auto-create the resource-based policy. Without this, callers (GitHub) get
-# 403 Forbidden / AccessDeniedException at the URL.
-resource "aws_lambda_permission" "from_github_url" {
-  statement_id           = "AllowPublicFunctionURL"
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.from_github.function_name
-  principal              = "*"
-  function_url_auth_type = "NONE"
+# IAM role API Gateway assumes to call sqs:SendMessage.
+resource "aws_iam_role" "apigw_to_sqs" {
+  name = "mirrorfm-apigw-from-github-webhook"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "apigateway.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
-# --- SQS → Lambda event source mapping (consumer mode) ---
+resource "aws_iam_role_policy" "apigw_to_sqs" {
+  name = "send-to-github-webhook-queue"
+  role = aws_iam_role.apigw_to_sqs.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "sqs:SendMessage"
+      Resource = aws_sqs_queue.github_webhook.arn
+    }]
+  })
+}
+
+resource "aws_apigatewayv2_integration" "sqs" {
+  api_id                 = aws_apigatewayv2_api.github_webhook.id
+  integration_type       = "AWS_PROXY"
+  integration_subtype    = "SQS-SendMessage"
+  credentials_arn        = aws_iam_role.apigw_to_sqs.arn
+  payload_format_version = "1.0"
+
+  request_parameters = {
+    QueueUrl    = aws_sqs_queue.github_webhook.url
+    MessageBody = "$request.body"
+  }
+}
+
+resource "aws_apigatewayv2_route" "post" {
+  api_id    = aws_apigatewayv2_api.github_webhook.id
+  route_key = "POST /"
+  target    = "integrations/${aws_apigatewayv2_integration.sqs.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.github_webhook.id
+  name        = "$default"
+  auto_deploy = true
+
+  default_route_settings {
+    throttling_burst_limit = 50
+    throttling_rate_limit  = 25
+  }
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.github_webhook_apigw.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+      integrationErr = "$context.integrationErrorMessage"
+    })
+  }
+}
+
+resource "aws_cloudwatch_log_group" "github_webhook_apigw" {
+  name              = "/aws/apigateway/mirrorfm-github-webhook"
+  retention_in_days = 14
+}
+
+# --- SQS → Lambda event source mapping (consumer) ---
 
 resource "aws_lambda_event_source_mapping" "github_webhook" {
   event_source_arn = aws_sqs_queue.github_webhook.arn
@@ -165,11 +247,6 @@ resource "aws_lambda_event_source_mapping" "github_webhook" {
 # --- Outputs ---
 
 output "github_webhook_url" {
-  description = "Use this as the GitHub webhook URL in mirrorfm/data settings (replace the old api.execute-api endpoint)."
-  value       = aws_lambda_function_url.from_github.function_url
-}
-
-output "github_webhook_secret_ssm_path" {
-  description = "Set the webhook secret here, then paste the same value into the GitHub webhook config."
-  value       = aws_ssm_parameter.github_webhook_secret.name
+  description = "Set this as the GitHub webhook Payload URL in mirrorfm/data settings, replacing the legacy API GW endpoint. Append POST path '/' is implicit."
+  value       = "${aws_apigatewayv2_api.github_webhook.api_endpoint}/"
 }

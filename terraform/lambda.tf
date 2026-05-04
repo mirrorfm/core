@@ -81,14 +81,14 @@ resource "aws_lambda_function" "to_www" {
 
   environment {
     variables = {
-      DB_HOST                = data.aws_ssm_parameter.to_www["db/host"].value
-      DB_USERNAME            = data.aws_ssm_parameter.to_www["db/username"].value
-      DB_PASSWORD            = data.aws_ssm_parameter.to_www["db/password"].value
-      DB_NAME                = data.aws_ssm_parameter.to_www["db/name"].value
-      SPOTIFY_CLIENT_ID      = data.aws_ssm_parameter.to_www["spotify/client-id"].value
-      SPOTIFY_CLIENT_SECRET  = data.aws_ssm_parameter.to_www["spotify/client-secret"].value
-      FIREBASE_PROJECT_ID    = data.aws_ssm_parameter.to_www["firebase/project-id"].value
-      STRIPE_SECRET_KEY      = data.aws_ssm_parameter.to_www["stripe/secret-key"].value
+      DB_HOST               = data.aws_ssm_parameter.to_www["db/host"].value
+      DB_USERNAME           = data.aws_ssm_parameter.to_www["db/username"].value
+      DB_PASSWORD           = data.aws_ssm_parameter.to_www["db/password"].value
+      DB_NAME               = data.aws_ssm_parameter.to_www["db/name"].value
+      SPOTIFY_CLIENT_ID     = data.aws_ssm_parameter.to_www["spotify/client-id"].value
+      SPOTIFY_CLIENT_SECRET = data.aws_ssm_parameter.to_www["spotify/client-secret"].value
+      FIREBASE_PROJECT_ID   = data.aws_ssm_parameter.to_www["firebase/project-id"].value
+      STRIPE_SECRET_KEY     = data.aws_ssm_parameter.to_www["stripe/secret-key"].value
     }
   }
 }
@@ -135,29 +135,14 @@ resource "aws_lambda_permission" "api_gateway_to_www" {
   source_arn    = "${aws_api_gateway_rest_api.cloud_api["to-www"].execution_arn}/*/*/*"
 }
 
-# Kept temporarily for the migration window. The Lambda function name is the
-# same after the package_type Image→Zip switch, so the existing API GW can
-# still invoke it until the webhook URL is moved over. Remove together with
-# the from-github entry in cloud_api above once the new URL is verified.
-resource "aws_lambda_permission" "api_gateway_from_github" {
-  statement_id  = "AllowAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.from_github.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.cloud_api["from-github"].execution_arn}/*/*/*"
-}
-
 # --- API Gateway REST APIs ---
-# from-github's API GW remains here in TF for the migration window. The Lambda
-# Function URL replaces it (see from_github_webhook.tf). Once the GitHub
-# webhook has been switched to the new URL and verified, remove "from-github"
-# from this for_each (and the lambda permission below) in a follow-up commit
-# to delete the old API GW.
+# from-github's REST API was decommissioned in favour of an HTTP API → SQS
+# direct integration (see from_github_webhook.tf). DeleteRestApi cascades to
+# the manually-created methods/integrations/stage that lived under it.
 
 resource "aws_api_gateway_rest_api" "cloud_api" {
   for_each = {
-    to-www      = "mirrorfm-to-www"
-    from-github = "mirrorfm-from-github"
+    to-www = "mirrorfm-to-www"
   }
   name                         = each.value
   disable_execute_api_endpoint = each.key == "to-www" ? true : false
