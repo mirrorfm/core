@@ -111,9 +111,15 @@ func isSQSEvent(raw json.RawMessage) bool {
 	return len(probe.Records) > 0 && probe.Records[0].EventSource == "aws:sqs"
 }
 
+// dataRepo is hardcoded so the webhook body cannot redirect the fetch at a
+// foreign repo. The webhook URL is publicly discoverable and HMAC is not
+// verified at ingress; without this, an attacker could POST arbitrary
+// repository.full_name and have us ingest channel IDs from any public repo.
+const dataRepo = "mirrorfm/data"
+
 func ProcessPushEvent(ctx context.Context, evt github.PushEvent) error {
 	fmt.Printf("%+v\n", evt)
-	if evt.Repo == nil || evt.Repo.FullName == nil || evt.HeadCommit == nil || evt.HeadCommit.Modified == nil {
+	if evt.HeadCommit == nil || evt.HeadCommit.Modified == nil {
 		fmt.Println("ignored incorrect event: some fields missing")
 		return nil
 	}
@@ -124,7 +130,10 @@ func ProcessPushEvent(ctx context.Context, evt github.PushEvent) error {
 	}
 
 	for _, file := range evt.HeadCommit.Modified {
-		current, err := app.ProcessFile(*evt.Repo.FullName, file)
+		if _, ok := categories[file]; !ok {
+			continue // ignore changes to other files
+		}
+		current, err := app.ProcessFile(dataRepo, file)
 		if err != nil {
 			return errors.Wrap(err, fmt.Sprintf("could not process file %s", file))
 		}

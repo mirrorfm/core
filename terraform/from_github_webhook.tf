@@ -247,6 +247,7 @@ resource "aws_lambda_event_source_mapping" "github_webhook" {
 # --- Outputs ---
 
 output "github_webhook_url" {
-  description = "Set this as the GitHub webhook Payload URL in mirrorfm/data settings, replacing the legacy API GW endpoint. Append POST path '/' is implicit."
+  description = "Set this as the GitHub webhook Payload URL in mirrorfm/data settings, replacing the legacy API GW endpoint. Marked sensitive so future TF apply logs (public, since the repo is OSS) don't republish the endpoint — anyone with the URL can POST messages to the SQS ingest, and we don't HMAC-verify at ingress."
   value       = "${aws_apigatewayv2_api.github_webhook.api_endpoint}/"
+  sensitive   = true
 }
