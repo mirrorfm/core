@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/sns"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-github/v33/github"
 	"github.com/pkg/errors"
 )
@@ -237,8 +237,15 @@ func (client *App) processLines(lines []string, current int, cat Category) (int,
 
 		err := client.InsertIntoTable(id, name, cat)
 		if err != nil {
-			fmt.Printf("skip duplicate #%d: %s\n", current, err.Error())
-			continue
+			if isDuplicateKey(err) {
+				fmt.Printf("skip duplicate #%d: %s\n", current, id)
+				continue
+			}
+			// Surface non-duplicate errors so the Lambda fails and SQS retries.
+			// Historically these were silently swallowed as "skip duplicate",
+			// which advanced the cursor past genuine failures and dropped rows
+			// (e.g. overstand87, _epler_).
+			return current - 1, errors.Wrap(err, fmt.Sprintf("insert #%d (%s) failed", current, id))
 		}
 
 		_, err = client.SNSClient.Publish(&sns.PublishInput{
@@ -252,6 +259,18 @@ func (client *App) processLines(lines []string, current int, cat Category) (int,
 	}
 
 	return current, nil
+}
+
+// isDuplicateKey returns true if err is the MySQL "Duplicate entry" error
+// (code 1062). Any other error must NOT be silently treated as a skip — that
+// historically lost rows when the cursor advanced past genuine failures.
+func isDuplicateKey(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	cause := errors.Cause(err)
+	if me, ok := cause.(*mysql.MySQLError); ok {
+		mysqlErr = me
+	}
+	return mysqlErr != nil && mysqlErr.Number == 1062
 }
 
 func (client *App) InsertIntoTable(id, name string, cat Category) error {
