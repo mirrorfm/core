@@ -94,10 +94,21 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to find next label to process")
 	}
+	log.Printf("Processing labelId=%d rowId=%d", labelId, rowId)
 
 	label, err := app.GetLabel(labelId)
+	if errors.Is(err, ErrNotFound) {
+		// Label was deleted/gone in Discogs. Skip it: advance the cursor so the
+		// loop can move on to the next row instead of retrying this dead row
+		// every 60s forever (which is what used to happen — see git history).
+		log.Printf("Skipping unavailable label labelId=%d rowId=%d (404/410)", labelId, rowId)
+		if rowId > 0 {
+			return app.SaveCursor("from_discogs_last_successful_label", rowId)
+		}
+		return nil
+	}
 	if err != nil {
-		return errors.Wrap(err, "failed to retrieve label")
+		return errors.Wrapf(err, "failed to retrieve label labelId=%d rowId=%d", labelId, rowId)
 	}
 
 	err = app.UpdateLabelWithThumbnail(label)
@@ -112,8 +123,14 @@ func Handler(ctx context.Context, evt events.SNSEvent) error {
 
 	for {
 		releases, err := app.GetLabelReleases(localLabel.LastPage, labelId)
+		if errors.Is(err, ErrNotFound) {
+			// Label became unavailable mid-iteration (rare). Advance cursor and
+			// move on; partial data we already wrote stays.
+			log.Printf("Label became unavailable mid-pagination labelId=%d page=%d, skipping", labelId, localLabel.LastPage)
+			break
+		}
 		if err != nil {
-			return errors.Wrap(err, "failed to get label releases")
+			return errors.Wrapf(err, "failed to get label releases labelId=%d page=%d", labelId, localLabel.LastPage)
 		}
 
 		localLabel.MaxPages = releases.Pagination.Pages
@@ -203,8 +220,12 @@ func (client *App) populateUniqueMasterReleases(releases *discogs.LabelReleases,
 		localLabel.HighestReleaseID = id
 
 		release, err := client.GetRelease(id)
+		if errors.Is(err, ErrNotFound) {
+			log.Printf("Skipping unavailable release id=%d (404/410)", id)
+			continue
+		}
 		if err != nil {
-			log.Printf("Skipping release %d: %v", id, err)
+			log.Printf("Skipping release %d due to error: %v", id, err)
 			continue
 		}
 

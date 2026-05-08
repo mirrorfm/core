@@ -138,24 +138,39 @@ def get_channel(channel_id):
     return cursor.fetchone()
 
 
+def save_cron_cursor(row_id):
+    # Called on every successful CRON exit (data processed, channel terminated,
+    # or no new tracks). Skipped on failures so the next loop tick retries.
+    if row_id is None:
+        return
+    mirrorfm_cursors.put_item(
+        Item={
+            'name': 'from_youtube_last_successful_channel',
+            'value': row_id
+        }
+    )
+
+
 def handle(event, context):
     upload_playlist_id = None
     last_upload_datetime = None
     old_yt_count_tracks = 0
 
+    cron_row_id = None  # set in CRON mode; saved as cursor on success only
     if 'Records' in event:
         # A channel_id was added to the `yt_channels` table
         channel_id = event['Records'][0]['Sns']['Message']
         channel = get_channel(channel_id)
     else:
-        # The lambda was triggered by CRON
+        # The lambda was triggered by CRON. Capture the row id so we can
+        # advance the cursor *after* successful processing — see the YouTube
+        # equivalent of the from-discogs "stuck cursor" / from-github
+        # "silently advanced cursor" incidents. Advancing the cursor up
+        # front means a processing failure silently drops the row from the
+        # ingest sweep forever; advancing only on success means a failure
+        # gets retried by the next loop tick (or surfaces in DLQ).
         channel = get_next_channel()
-        mirrorfm_cursors.put_item(
-            Item={
-                'name': 'from_youtube_last_successful_channel',
-                'value': channel['id']
-            }
-        )
+        cron_row_id = channel['id']
         channel_id = channel['channel_id']
         print(channel['channel_name'])
         if 'last_upload_datetime' in channel:
@@ -206,6 +221,7 @@ def handle(event, context):
             print("Set channel as terminated")
         else:
             print("Channel already terminated")
+        save_cron_cursor(cron_row_id)  # permanent-skip, advance cursor
         return {"searched": 1, "found": 0}
 
     print(channel_name)
@@ -239,7 +255,9 @@ def handle(event, context):
                     pageToken=page_token
                 ).execute()
             except Exception as e:
-                print(e)
+                # Pagination failed — do NOT advance cursor; next loop tick
+                # retries this same channel.
+                print("playlistItems.list failed for channel_id=%s page_token=%s: %s" % (channel_id, page_token, e))
                 return {"searched": 1, "found": 0}
             for item in response['items']:
                 next_last_upload_datetime = add_to_list_if_new_upload(item, new_items_desc, next_last_upload_datetime, last_upload_datetime, process_full_list)
@@ -261,7 +279,9 @@ def handle(event, context):
                     publishedAfter=datetime_to_zulu(last_upload_datetime)
                 ).execute()
             except Exception as e:
-                print(e)
+                # Pagination failed — do NOT advance cursor; next loop tick
+                # retries this same channel.
+                print("activities.list failed for channel_id=%s page_token=%s: %s" % (channel_id, page_token, e))
                 return {"searched": 1, "found": 0}
             for item in response['items']:
                 if item['snippet']['type'] == 'upload':
@@ -302,9 +322,11 @@ def handle(event, context):
                 QueueUrl=SQS_TO_SPOTIFY_URL,
                 MessageBody=json.dumps({"host": "yt", "entity_id": channel_id}))
             print("Notified to-spotify via SQS")
+        save_cron_cursor(cron_row_id)  # success → advance cursor
         return {"searched": 1, "found": len(new_items_desc)}
     else:
         print("No new tracks")
+        save_cron_cursor(cron_row_id)  # success (no-op) → advance cursor
         return {"searched": 1, "found": 0}
 
 
