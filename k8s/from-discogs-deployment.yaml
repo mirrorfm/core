@@ -18,8 +18,13 @@ spec:
           image: mirrorfm-from-discogs:latest
           imagePullPolicy: Never
           env:
-            - name: LOOP_INTERVAL
-              value: "60"
+            # SQS-first runner inside the Go binary (mirrors k3s_runner.py).
+            # MIN_INTERVAL: pause between successful iterations.
+            # SHORT_IDLE: pause when both SQS and cursor have no work.
+            - name: MIN_INTERVAL
+              value: "1"
+            - name: SHORT_IDLE
+              value: "5"
           envFrom:
             - secretRef:
                 name: from-discogs-secrets

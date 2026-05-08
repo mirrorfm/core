@@ -3,10 +3,15 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"time"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"encoding/json"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -15,11 +20,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/irlndts/go-discogs"
 	"github.com/pkg/errors"
-	"strconv"
-
-	//"github.com/disintegration/imaging"
-	"log"
-	"os"
 )
 
 type App struct {
@@ -273,22 +273,132 @@ func isReleaseAlreadyStored(releaseId int, localLabel LocalLabel) bool {
 	return localLabel.DidInit.Bool && releaseId <= localLabel.HighestReleaseID
 }
 
+// runK3sLoop is the long-running entrypoint for the k3s deployment.
+//
+// Mirrors scripts/k3s_runner.py (used by from-youtube/to-spotify): poll the
+// SQS queue first so newly-submitted labels are picked up within seconds of
+// the from-github webhook. If the queue is empty, fall back to the cursor-
+// based sweep (CRON-equivalent — walks dg_labels by id) so we still catch up
+// on anything missed during downtime.
+//
+// Without this loop the pod was running scripts/loop.sh, which is cursor-
+// only — meaning new SNS notifications sat in the SQS queue forever (k3s
+// doesn't read them, Lambda failover is disabled), and new submissions
+// only got processed when the cursor walked to them, which could take days.
+func runK3sLoop(ctx context.Context) {
+	minInterval := getEnvIntOr("MIN_INTERVAL", 1)
+	shortIdle := getEnvIntOr("SHORT_IDLE", 5)
+	queueURL := os.Getenv("SQS_QUEUE_URL")
+	pollWait := getEnvIntOr("SQS_POLL_WAIT", 5)
+
+	var sqsClient *sqs.SQS
+	if queueURL != "" {
+		sess := session.Must(session.NewSession(&aws.Config{Region: aws.String("eu-west-1")}))
+		sqsClient = sqs.New(sess)
+	} else {
+		log.Printf("SQS_QUEUE_URL not set — running cursor-only mode (new submissions will be delayed until cursor reaches them)")
+	}
+
+	for {
+		// 1. Try SQS first — instant processing of new submissions.
+		if sqsClient != nil {
+			body, receipt, err := pollSQS(ctx, sqsClient, queueURL, pollWait)
+			if err != nil {
+				log.Printf("[runner] SQS receive error: %v", err)
+				time.Sleep(time.Duration(shortIdle) * time.Second)
+				continue
+			}
+			if body != "" {
+				labelID, ok := extractSNSLabelID(body)
+				if !ok {
+					log.Printf("[runner] could not parse SQS body, dropping: %.200s", body)
+					_, _ = sqsClient.DeleteMessageWithContext(ctx, &sqs.DeleteMessageInput{
+						QueueUrl: aws.String(queueURL), ReceiptHandle: aws.String(receipt),
+					})
+					continue
+				}
+				evt := events.SNSEvent{Records: []events.SNSEventRecord{{
+					SNS: events.SNSEntity{Message: labelID},
+				}}}
+				log.Printf("[runner] processing SQS-delivered label labelId=%s", labelID)
+				if err := Handler(ctx, evt); err != nil {
+					log.Printf("[runner] Handler failed for labelId=%s: %v — leaving SQS message for retry", labelID, err)
+				} else {
+					_, _ = sqsClient.DeleteMessageWithContext(ctx, &sqs.DeleteMessageInput{
+						QueueUrl: aws.String(queueURL), ReceiptHandle: aws.String(receipt),
+					})
+				}
+				time.Sleep(time.Duration(minInterval) * time.Second)
+				continue
+			}
+		}
+
+		// 2. Fallback — cursor sweep (catches labels added during downtime).
+		if err := Handler(ctx, events.SNSEvent{}); err != nil {
+			log.Printf("[runner] cursor-mode error: %v", err)
+		}
+		time.Sleep(time.Duration(shortIdle) * time.Second)
+	}
+}
+
+// pollSQS does a single long-poll receive. Returns (body, receipt, err) or
+// ("", "", nil) when the queue had no messages within the wait window.
+func pollSQS(ctx context.Context, c *sqs.SQS, queueURL string, waitSeconds int) (string, string, error) {
+	out, err := c.ReceiveMessageWithContext(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(queueURL),
+		MaxNumberOfMessages: aws.Int64(1),
+		WaitTimeSeconds:     aws.Int64(int64(waitSeconds)),
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if len(out.Messages) == 0 {
+		return "", "", nil
+	}
+	return aws.StringValue(out.Messages[0].Body), aws.StringValue(out.Messages[0].ReceiptHandle), nil
+}
+
+// extractSNSLabelID handles both SNS-wrapped messages (when SQS subscribes to
+// SNS) and bare label-id payloads (when published directly to the queue, e.g.
+// via the Lambda from-github writer). The from-github code publishes to SNS
+// which fans out to SQS; the SQS body is then a JSON envelope with .Message
+// being the actual label id.
+func extractSNSLabelID(body string) (string, bool) {
+	var env struct {
+		Type    string `json:"Type"`
+		Message string `json:"Message"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err == nil && env.Type == "Notification" && env.Message != "" {
+		return env.Message, true
+	}
+	// Fall back: the body might already be just the bare id.
+	if _, err := strconv.Atoi(body); err == nil {
+		return body, true
+	}
+	return "", false
+}
+
+func getEnvIntOr(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
 func main() {
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
 		lambda.Start(Handler)
-	} else {
-		// Also handle loop
-		err := Handler(context.TODO(), events.SNSEvent{
-			Records: []events.SNSEventRecord{
-				//{
-				//	SNS: events.SNSEntity{
-				//		Message: "720419", // 77423
-				//	},
-				//},
-			},
-		})
-		if err != nil {
-			fmt.Println(err.Error())
-		}
+		return
+	}
+	if os.Getenv("SQS_QUEUE_URL") != "" || os.Getenv("MIN_INTERVAL") != "" {
+		// k3s pod mode — long-running SQS-first loop.
+		runK3sLoop(context.Background())
+		return
+	}
+	// Local one-shot run for ad-hoc testing.
+	if err := Handler(context.TODO(), events.SNSEvent{}); err != nil {
+		fmt.Println(err.Error())
 	}
 }

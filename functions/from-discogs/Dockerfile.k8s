@@ -7,6 +7,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /from-discogs
 
 FROM alpine:3.19
 COPY --from=build /from-discogs /app/from-discogs
-COPY scripts/loop.sh /app/loop.sh
-RUN chmod +x /app/loop.sh
-CMD ["/app/loop.sh", "/app/from-discogs"]
+# SQS-first long-running loop is built into the binary (runK3sLoop). When
+# SQS_QUEUE_URL or MIN_INTERVAL is set, the binary stays running, polls SQS
+# for new SNS-delivered submissions, and falls back to cursor sweep on empty
+# queue. Same pattern as k3s_runner.py used by from-youtube/to-spotify.
+CMD ["/app/from-discogs"]
