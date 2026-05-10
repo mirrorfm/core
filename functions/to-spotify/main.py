@@ -650,6 +650,7 @@ def handle(event, c):
         entity_name = entity[cats[handler.current_host]['entity_name']]
 
         while True:
+            handler.conn.ping(reconnect=True)
             tracks_to_process = get_next_tracks(handler, entity_id)
             for record in tracks_to_process['Items']:
                 if 'spotify_uri' not in record:
