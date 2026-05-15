@@ -192,7 +192,9 @@ def handle(event, context):
         raise(Exception("Missing YT_DEVELOPER_KEY env"))
 
     for i, key in enumerate(keys):
-        print(i, key)
+        # Never log the key value itself — log only the index and fingerprint.
+        # Previously this printed the full API key to CloudWatch on every run.
+        print(f"key index {i} (fingerprint: ...{key[-4:]})")
         youtube = discovery.build("youtube", "v3", developerKey=key)
 
         try:
@@ -202,7 +204,7 @@ def handle(event, context):
             ).execute()
             break
         except Exception as e:
-            print(i, key, e)
+            print(f"key index {i} failed: {e}")
             if i == len(keys) - 1:
                 raise(Exception("Quota exceeded on all developer keys"))
 
