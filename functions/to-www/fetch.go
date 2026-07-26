@@ -606,6 +606,9 @@ func (c *Client) getEventsFromType(count int, entity string, ch chan []Event, wg
 }
 
 func (c *Client) getEvents(count int) (events []Event, err error) {
+	// Initialise as a non-nil slice so an empty result serialises as [] (not null),
+	// which the frontend can safely iterate over.
+	events = []Event{}
 	ch := make(chan []Event)
 	var wg sync.WaitGroup
 
